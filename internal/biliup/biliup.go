@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"unicode/utf8"
 )
 
 // CheckAvailable checks if biliup is available in PATH or at the specified path.
@@ -38,6 +39,8 @@ type UploadOptions struct {
 
 // Upload uploads a video to Bilibili using biliup.
 func Upload(opts UploadOptions) error {
+	opts = normalizeUploadOptions(opts)
+
 	path := "biliup"
 	if opts.CustomPath != "" {
 		path = opts.CustomPath
@@ -88,4 +91,45 @@ func Upload(opts UploadOptions) error {
 	}
 
 	return nil
+}
+
+func normalizeUploadOptions(opts UploadOptions) UploadOptions {
+	opts.Title = truncateRunes(cleanText(opts.Title), 80)
+	opts.Desc = truncateRunes(cleanText(opts.Desc), 2000)
+	opts.Source = truncateRunes(cleanText(opts.Source), 200)
+	opts.Tags = normalizeTags(opts.Tags)
+	return opts
+}
+
+func normalizeTags(tags []string) []string {
+	seen := make(map[string]struct{}, len(tags))
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = truncateRunes(cleanText(tag), 20)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+		if len(result) == 10 {
+			break
+		}
+	}
+	return result
+}
+
+func cleanText(value string) string {
+	return strings.TrimSpace(strings.ReplaceAll(value, "\x00", ""))
+}
+
+func truncateRunes(value string, max int) string {
+	if utf8.RuneCountInString(value) <= max {
+		return value
+	}
+
+	runes := []rune(value)
+	return string(runes[:max])
 }

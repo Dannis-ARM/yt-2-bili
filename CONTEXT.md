@@ -31,6 +31,18 @@ The description for a Bilibili Video, which includes the original YouTube video'
 ## Playlist
 A collection of YouTube videos. Not supported initially.
 
+## Subtitle
+Timed text generated from a video's audio track. Used to make a Bilibili Video easier to watch and understand.
+
+## Soft Subtitle
+A subtitle track embedded in a video container without burning the text into the video image.
+
+## Subtitled Video
+A video file that contains a Soft Subtitle track and can be used for upload instead of the original video file.
+
+## Whisper
+A local speech-to-text tool used to generate subtitles from downloaded video audio.
+
 ## yt-2-bili
 A command-line tool written in Go that downloads YouTube Videos and uploads them to Bilibili.
 

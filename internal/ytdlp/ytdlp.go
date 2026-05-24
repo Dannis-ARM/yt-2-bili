@@ -62,10 +62,11 @@ func GetVideoInfo(url string, customPath string) (*VideoInfo, error) {
 
 // DownloadOptions contains options for downloading a video.
 type DownloadOptions struct {
-	OutputDir    string
-	Quality      string // "1080p", "720p", etc.
-	CustomPath   string
-	ShowProgress bool
+	OutputDir     string
+	Quality       string // "1080p", "720p", etc.
+	CustomPath    string
+	ShowProgress  bool
+	ForceDownload bool
 }
 
 // DownloadResult contains the paths to the downloaded files.
@@ -84,6 +85,17 @@ func DownloadVideo(url string, opts DownloadOptions) (*DownloadResult, error) {
 	// Create output directory if it doesn't exist
 	if err := os.MkdirAll(opts.OutputDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	info, err := GetVideoInfo(url, opts.CustomPath)
+	if err != nil {
+		return nil, err
+	}
+	if !opts.ForceDownload {
+		if result, ok := existingDownload(opts.OutputDir, info); ok {
+			fmt.Printf("Using existing downloaded video: %s\n", result.VideoPath)
+			return result, nil
+		}
 	}
 
 	outputTemplate := filepath.Join(opts.OutputDir, "%(id)s.%(ext)s")
@@ -123,31 +135,41 @@ func DownloadVideo(url string, opts DownloadOptions) (*DownloadResult, error) {
 		return nil, fmt.Errorf("yt-dlp download failed: %w", err)
 	}
 
-	// First, get the info to know the actual filenames
-	info, err := GetVideoInfo(url, opts.CustomPath)
-	if err != nil {
-		return nil, err
+	result, ok := existingDownload(opts.OutputDir, info)
+	if !ok {
+		return nil, fmt.Errorf("download finished but expected video file was not found")
 	}
 
-	videoPath := filepath.Join(opts.OutputDir, fmt.Sprintf("%s.mp4", info.ID))
-	if _, err := os.Stat(videoPath); err != nil {
-		videoPath = filepath.Join(opts.OutputDir, fmt.Sprintf("%s.%s", info.ID, info.Ext))
-	}
+	return result, nil
+}
 
-	// Find the thumbnail file - yt-dlp saves it with the same name but different extension
-	// We need to check common extensions
-	thumbnailExts := []string{"jpg", "jpeg", "png", "webp"}
-	var thumbnailPath string
-	for _, ext := range thumbnailExts {
-		candidate := filepath.Join(opts.OutputDir, fmt.Sprintf("%s.%s", info.ID, ext))
-		if _, err := os.Stat(candidate); err == nil {
-			thumbnailPath = candidate
-			break
+func existingDownload(outputDir string, info *VideoInfo) (*DownloadResult, bool) {
+	videoPath := filepath.Join(outputDir, fmt.Sprintf("%s.mp4", info.ID))
+	if !isNonEmptyFile(videoPath) {
+		fallbackPath := filepath.Join(outputDir, fmt.Sprintf("%s.%s", info.ID, info.Ext))
+		if !isNonEmptyFile(fallbackPath) {
+			return nil, false
 		}
+		videoPath = fallbackPath
 	}
 
 	return &DownloadResult{
 		VideoPath:     videoPath,
-		ThumbnailPath: thumbnailPath,
-	}, nil
+		ThumbnailPath: existingThumbnail(outputDir, info.ID),
+	}, true
+}
+
+func existingThumbnail(outputDir, videoID string) string {
+	for _, ext := range []string{"jpg", "jpeg", "png", "webp"} {
+		candidate := filepath.Join(outputDir, fmt.Sprintf("%s.%s", videoID, ext))
+		if isNonEmptyFile(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func isNonEmptyFile(path string) bool {
+	stat, err := os.Stat(path)
+	return err == nil && stat.Size() > 0 && !stat.IsDir()
 }

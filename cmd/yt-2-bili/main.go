@@ -6,19 +6,28 @@ import (
 	"strings"
 
 	"github.com/dannis/yt-2-bili/internal/biliup"
+	"github.com/dannis/yt-2-bili/internal/subtitle"
 	"github.com/dannis/yt-2-bili/internal/workflow"
 	"github.com/dannis/yt-2-bili/internal/ytdlp"
 	"github.com/spf13/cobra"
 )
 
 var (
-	cookie     string
-	outputDir  string
-	quality    string
-	tid        int
-	keepVideo  bool
-	ytDlpPath  string
-	biliupPath string
+	cookie        string
+	outputDir     string
+	quality       string
+	tid           int
+	cleanup       bool
+	forceDownload bool
+	ytDlpPath     string
+	biliupPath    string
+
+	generateSubtitles bool
+	whisperPath       string
+	whisperModel      string
+	whisperDevice     string
+	whisperLanguage   string
+	whisperThreads    int
 
 	uploadTitle  string
 	uploadDesc   string
@@ -31,6 +40,7 @@ func main() {
 	rootCmd := newRootCmd()
 
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -39,8 +49,10 @@ func newRootCmd() *cobra.Command {
 	resetFlags()
 
 	rootCmd := &cobra.Command{
-		Use:   "yt-2-bili <command>",
-		Short: "Download YouTube videos and upload to Bilibili",
+		Use:           "yt-2-bili <command>",
+		Short:         "Download YouTube videos and upload to Bilibili",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		Long: `yt-2-bili downloads YouTube videos using yt-dlp and uploads them to Bilibili using biliup-rs.
 
 Requires:
@@ -111,7 +123,14 @@ func addCommonFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVarP(&outputDir, "output-dir", "o", "", fmt.Sprintf("Directory to save downloaded files (default: %s)", workflow.DefaultOutputDir()))
 	cmd.PersistentFlags().StringVarP(&quality, "quality", "q", "1080p", "Video quality (1080p, 720p, 480p, best)")
 	cmd.PersistentFlags().IntVarP(&tid, "tid", "t", 171, "Bilibili投稿分区 (default: 171 游戏区)")
-	cmd.PersistentFlags().BoolVar(&keepVideo, "keep-video", false, "Keep downloaded video files after upload (default: delete)")
+	cmd.PersistentFlags().BoolVar(&cleanup, "cleanup", false, "Clean up generated files after a successful transfer")
+	cmd.PersistentFlags().BoolVar(&forceDownload, "force-download", false, "Download again even if the expected video file already exists")
+	cmd.PersistentFlags().BoolVar(&generateSubtitles, "generate-subtitles", false, "Generate SRT subtitles and embed them as soft subtitles into an MP4")
+	cmd.PersistentFlags().StringVar(&whisperPath, "whisper-path", "", "Path to whisper executable (default: look in PATH)")
+	cmd.PersistentFlags().StringVar(&whisperModel, "whisper-model", "", "Whisper model name; omitted uses whisper default")
+	cmd.PersistentFlags().StringVar(&whisperDevice, "whisper-device", "", "Whisper device; omitted uses whisper default")
+	cmd.PersistentFlags().StringVar(&whisperLanguage, "whisper-language", "", "Whisper language; omitted auto-detects")
+	cmd.PersistentFlags().IntVar(&whisperThreads, "whisper-threads", 0, "Whisper CPU thread count; 0 uses whisper default")
 	cmd.PersistentFlags().StringVar(&ytDlpPath, "yt-dlp-path", "", "Path to yt-dlp executable (default: look in PATH)")
 	cmd.PersistentFlags().StringVar(&biliupPath, "biliup-path", "", "Path to biliup executable (default: look in PATH)")
 }
@@ -121,9 +140,16 @@ func resetFlags() {
 	outputDir = ""
 	quality = "1080p"
 	tid = 171
-	keepVideo = false
+	cleanup = false
+	forceDownload = false
 	ytDlpPath = ""
 	biliupPath = ""
+	generateSubtitles = false
+	whisperPath = ""
+	whisperModel = ""
+	whisperDevice = ""
+	whisperLanguage = ""
+	whisperThreads = 0
 	uploadTitle = ""
 	uploadDesc = ""
 	uploadCover = ""
@@ -159,10 +185,11 @@ func runDownload(youtubeURL string) error {
 	fmt.Printf("Video found: %s (by %s)\n", info.Title, info.Uploader)
 	fmt.Println("Downloading video...")
 	result, err := ytdlp.DownloadVideo(youtubeURL, ytdlp.DownloadOptions{
-		OutputDir:    outputDir,
-		Quality:      quality,
-		CustomPath:   ytDlpPath,
-		ShowProgress: true,
+		OutputDir:     outputDir,
+		Quality:       quality,
+		CustomPath:    ytDlpPath,
+		ShowProgress:  true,
+		ForceDownload: forceDownload,
 	})
 	if err != nil {
 		return err
@@ -172,10 +199,27 @@ func runDownload(youtubeURL string) error {
 	if result.ThumbnailPath != "" {
 		fmt.Printf("Downloaded thumbnail: %s\n", result.ThumbnailPath)
 	}
+	if generateSubtitles {
+		subtitleResult, err := ensureSubtitles(result.VideoPath)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Generated subtitle: %s\n", subtitleResult.SubtitlePath)
+		fmt.Printf("Generated subtitled video: %s\n", subtitleResult.SubtitledVideoPath)
+	}
 	return nil
 }
 
 func runUpload(videoPath string) error {
+	if generateSubtitles {
+		subtitleResult, err := ensureSubtitles(videoPath)
+		if err != nil {
+			return err
+		}
+		videoPath = subtitleResult.SubtitledVideoPath
+		fmt.Printf("Using subtitled video: %s\n", videoPath)
+	}
+
 	if uploadTitle == "" {
 		return fmt.Errorf("--title is required for upload")
 	}
@@ -198,17 +242,37 @@ func runUpload(videoPath string) error {
 	})
 }
 
+func ensureSubtitles(videoPath string) (*subtitle.Result, error) {
+	fmt.Println("Generating subtitles...")
+	return subtitle.EnsureSoftSubtitled(subtitle.Options{
+		VideoPath:    videoPath,
+		WhisperPath:  whisperPath,
+		Model:        whisperModel,
+		Device:       whisperDevice,
+		Language:     whisperLanguage,
+		Threads:      whisperThreads,
+		ShowProgress: true,
+	})
+}
+
 func runTransfer(youtubeURL string) error {
 	opts := workflow.Options{
-		YouTubeURL:   youtubeURL,
-		BiliupCookie: cookie,
-		OutputDir:    outputDir,
-		Quality:      quality,
-		Tid:          tid,
-		KeepVideo:    keepVideo,
-		YtDlpPath:    ytDlpPath,
-		BiliupPath:   biliupPath,
-		ShowProgress: true,
+		YouTubeURL:        youtubeURL,
+		BiliupCookie:      cookie,
+		OutputDir:         outputDir,
+		Quality:           quality,
+		Tid:               tid,
+		Cleanup:           cleanup,
+		ForceDownload:     forceDownload,
+		GenerateSubtitles: generateSubtitles,
+		WhisperPath:       whisperPath,
+		WhisperModel:      whisperModel,
+		WhisperDevice:     whisperDevice,
+		WhisperLanguage:   whisperLanguage,
+		WhisperThreads:    whisperThreads,
+		YtDlpPath:         ytDlpPath,
+		BiliupPath:        biliupPath,
+		ShowProgress:      true,
 	}
 
 	return workflow.Run(opts)

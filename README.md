@@ -10,6 +10,12 @@ Install these tools first and make sure they are available in `PATH`:
 - `bun` for yt-dlp JavaScript runtime
 - `biliup-rs`
 
+Optional for subtitle generation:
+
+- `whisper`
+- `ffmpeg`
+- `ffprobe`
+
 Log in to Bilibili before uploading:
 
 ```bash
@@ -34,10 +40,32 @@ yt-2-bili download <youtube-url>
 
 Downloads the video, metadata, and thumbnail using `yt-dlp`. By default, it prefers MP4/M4A formats and merges output to MP4 for better Bilibili compatibility.
 
+If `<video-id>.mp4` already exists in the output directory and is not empty, the existing file is reused. Use `--force-download` to download again. `yt-dlp`'s default partial download resume behavior remains enabled.
+
+Generate subtitles during download:
+
+```bash
+yt-2-bili download --generate-subtitles <youtube-url>
+```
+
+This creates:
+
+```text
+<video-id>.mp4
+<video-id>.srt
+<video-id>.subtitled.mp4
+```
+
 ### Upload to Bilibili
 
 ```bash
 yt-2-bili upload --cookie cookies.json --title "Video title" video.mp4
+```
+
+Generate and upload a soft-subtitled MP4:
+
+```bash
+yt-2-bili upload --generate-subtitles --cookie cookies.json --title "Video title" video.mp4
 ```
 
 Useful options:
@@ -62,6 +90,8 @@ yt-2-bili transfer --cookie cookies.json <youtube-url>
 
 This downloads the YouTube video, builds a Bilibili description containing the original author and YouTube link, then uploads it to Bilibili.
 
+With `--generate-subtitles`, it generates `<video-id>.srt`, embeds it into `<video-id>.subtitled.mp4`, and uploads the subtitled MP4.
+
 ## Common Options
 
 | Option | Description |
@@ -70,7 +100,14 @@ This downloads the YouTube video, builds a Bilibili description containing the o
 | `-o, --output-dir` | Directory for downloaded files. Default on this machine: `C:\Users\18905\AppData\Local\Temp\yt-2-bili`. |
 | `-q, --quality` | Video quality: `1080p`, `720p`, `480p`, or `best`. Default: `1080p`. |
 | `-t, --tid` | Bilibili category ID. Default: `171`. |
-| `--keep-video` | Keep downloaded files after a successful `transfer`. |
+| `--cleanup` | Clean up generated files after a successful `transfer`; by default files are kept. |
+| `--force-download` | Download again even if the expected local video file already exists. |
+| `--generate-subtitles` | Generate an SRT file and embed it as a soft subtitle into an MP4. |
+| `--whisper-path` | Path to the `whisper` executable if it is not in `PATH`. |
+| `--whisper-model` | Whisper model name; omitted uses Whisper's default. |
+| `--whisper-device` | Whisper device; omitted uses Whisper's default. |
+| `--whisper-language` | Whisper language; omitted enables auto-detection. |
+| `--whisper-threads` | Whisper CPU thread count; `0` uses Whisper's default. |
 | `--yt-dlp-path` | Path to the `yt-dlp` executable if it is not in `PATH`. |
 | `--biliup-path` | Path to the `biliup` executable if it is not in `PATH`. |
 
@@ -96,6 +133,12 @@ Run download only:
 
 ```powershell
 python integration-tests\download.py
+```
+
+Run subtitle generation test:
+
+```powershell
+python integration-tests\subtitles.py
 ```
 
 Run real upload using a generated short test video:
