@@ -26,6 +26,22 @@ func TestHelpShowsWorkflowSubcommands(t *testing.T) {
 	}
 }
 
+func TestSubtitleTargetLanguageRequiresGenerateSubtitles(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"download", "--subtitle-target-language", "zh", "https://www.youtube.com/watch?v=test"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("--subtitle-target-language without --generate-subtitles should fail")
+	}
+	if !strings.Contains(err.Error(), "requires --generate-subtitles") {
+		t.Fatalf("expected missing generate-subtitles error, got: %v", err)
+	}
+}
+
 func TestUploadRequiresTitle(t *testing.T) {
 	cmd := newRootCmd()
 	var out bytes.Buffer

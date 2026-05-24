@@ -25,6 +25,8 @@ var (
 	generateSubtitles     bool
 	whisperPath           string
 	whisperModelDirectory string
+	subtitleTargetLanguage string
+	llmModelName          string
 
 	uploadTitle  string
 	uploadDesc   string
@@ -125,6 +127,8 @@ func addCommonFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVar(&generateSubtitles, "generate-subtitles", false, "Generate SRT subtitles and embed them as soft subtitles into an MP4")
 	cmd.PersistentFlags().StringVar(&whisperPath, "whisper-path", "", "Path to whisper executable (default: look in PATH)")
 	cmd.PersistentFlags().StringVar(&whisperModelDirectory, "whisper-model-directory", "", "Whisper model directory; passed as --model_directory to compatible CLIs")
+	cmd.PersistentFlags().StringVar(&subtitleTargetLanguage, "subtitle-target-language", "", "Target language for subtitle translation (e.g. zh); requires --generate-subtitles")
+	cmd.PersistentFlags().StringVar(&llmModelName, "llm-model-name", "doubao-seed-2-0-pro-260215", "LLM model name for subtitle translation")
 	cmd.PersistentFlags().StringVar(&ytDlpPath, "yt-dlp-path", "", "Path to yt-dlp executable (default: look in PATH)")
 	cmd.PersistentFlags().StringVar(&biliupPath, "biliup-path", "", "Path to biliup executable (default: look in PATH)")
 }
@@ -141,6 +145,8 @@ func resetFlags() {
 	generateSubtitles = false
 	whisperPath = ""
 	whisperModelDirectory = ""
+	subtitleTargetLanguage = ""
+	llmModelName = "doubao-seed-2-0-pro-260215"
 	uploadTitle = ""
 	uploadDesc = ""
 	uploadCover = ""
@@ -159,7 +165,17 @@ func prepareDefaults() {
 	}
 }
 
+func validateFlags() error {
+	if subtitleTargetLanguage != "" && !generateSubtitles {
+		return fmt.Errorf("--subtitle-target-language requires --generate-subtitles")
+	}
+	return nil
+}
+
 func runDownload(youtubeURL string) error {
+	if err := validateFlags(); err != nil {
+		return err
+	}
 	if err := ytdlp.CheckAvailable(ytDlpPath); err != nil {
 		return fmt.Errorf("dependency check failed: %w\nPlease install yt-dlp first", err)
 	}
@@ -202,6 +218,9 @@ func runDownload(youtubeURL string) error {
 }
 
 func runUpload(videoPath string) error {
+	if err := validateFlags(); err != nil {
+		return err
+	}
 	if generateSubtitles {
 		subtitleResult, err := ensureSubtitles(videoPath)
 		if err != nil {
@@ -235,29 +254,59 @@ func runUpload(videoPath string) error {
 
 func ensureSubtitles(videoPath string) (*subtitle.Result, error) {
 	fmt.Println("Generating subtitles...")
+	translator, err := makeTranslator()
+	if err != nil {
+		return nil, err
+	}
 	return subtitle.EnsureSoftSubtitled(subtitle.Options{
-		VideoPath:      videoPath,
-		WhisperPath:    whisperPath,
-		ModelDirectory: whisperModelDirectory,
-		ShowProgress:   true,
+		VideoPath:              videoPath,
+		WhisperPath:            whisperPath,
+		ModelDirectory:         whisperModelDirectory,
+		SubtitleTargetLanguage: subtitleTargetLanguage,
+		Translator:             translator,
+		ShowProgress:           true,
 	})
 }
 
+func makeTranslator() (subtitle.Translator, error) {
+	if subtitleTargetLanguage == "" {
+		return nil, nil
+	}
+	apiKey := os.Getenv("ARK_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("ARK_API_KEY environment variable is required for subtitle translation")
+	}
+	return subtitle.NewLLMTranslator(subtitle.LLMTranslatorOptions{
+		BaseURL: "https://ark.cn-beijing.volces.com/api/coding/v3",
+		APIKey:  apiKey,
+		Model:   llmModelName,
+	}), nil
+}
+
 func runTransfer(youtubeURL string) error {
+	if err := validateFlags(); err != nil {
+		return err
+	}
+	translator, err := makeTranslator()
+	if err != nil {
+		return err
+	}
 	opts := workflow.Options{
-		YouTubeURL:            youtubeURL,
-		BiliupCookie:          cookie,
-		OutputDir:             outputDir,
-		Quality:               quality,
-		Tid:                   tid,
-		Cleanup:               cleanup,
-		ForceDownload:         forceDownload,
-		GenerateSubtitles:     generateSubtitles,
-		WhisperPath:           whisperPath,
-		WhisperModelDirectory: whisperModelDirectory,
-		YtDlpPath:             ytDlpPath,
-		BiliupPath:            biliupPath,
-		ShowProgress:          true,
+		YouTubeURL:             youtubeURL,
+		BiliupCookie:           cookie,
+		OutputDir:              outputDir,
+		Quality:                quality,
+		Tid:                    tid,
+		Cleanup:                cleanup,
+		ForceDownload:          forceDownload,
+		GenerateSubtitles:      generateSubtitles,
+		WhisperPath:            whisperPath,
+		WhisperModelDirectory:  whisperModelDirectory,
+		SubtitleTargetLanguage: subtitleTargetLanguage,
+		Translator:             translator,
+		YtDlpPath:              ytDlpPath,
+		BiliupPath:             biliupPath,
+		ShowProgress:           true,
 	}
 
 	return workflow.Run(opts)

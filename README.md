@@ -78,6 +78,42 @@ This creates:
 <video-id>.subtitled.mp4
 ```
 
+#### Translate subtitles to Simplified Chinese
+
+When `--subtitle-target-language zh` is set with `--generate-subtitles`, the source SRT is sent to Doubao via the Volcengine Ark API for translation. Each batch preserves block count, numbering, and time ranges exactly; translation failure stops the upload.
+
+```powershell
+# Set your Ark API key
+$env:ARK_API_KEY = "your-api-key"
+
+yt-2-bili transfer `
+  --cookie $env:USERPROFILE\cookies.json `
+  --generate-subtitles `
+  --subtitle-target-language zh `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
+  <youtube-url>
+```
+
+Optional: override the LLM model (default is `doubao-seed-2-0-pro-260215`).
+
+```powershell
+yt-2-bili transfer `
+  --generate-subtitles `
+  --subtitle-target-language zh `
+  --llm-model-name "doubao-seed-2-0-pro-260215" `
+  <youtube-url>
+```
+
+This creates:
+
+```text
+<video-id>.mp4
+<video-id>.srt              # Source SRT, kept as intermediate artifact
+<video-id>.zh.srt            # Chinese SRT
+<video-id>.zh.subtitled.mp4  # Video with Chinese soft subtitle
+```
+
 ### Upload to Bilibili
 
 ```bash
@@ -112,13 +148,13 @@ yt-2-bili transfer --cookie cookies.json <youtube-url>
 
 This downloads the YouTube video, builds a Bilibili description containing the original author and YouTube link, then uploads it to Bilibili.
 
-With `--generate-subtitles`, it generates `<video-id>.srt`, embeds it into `<video-id>.subtitled.mp4`, and uploads the subtitled MP4.
+With `--generate-subtitles`, it generates `<video-id>.srt`, embeds it into `<video-id>.subtitled.mp4`, and uploads the subtitled MP4. Add `--subtitle-target-language zh` to translate the source subtitles to Simplified Chinese before embedding.
 
 Use `whisper-ctranslate2` with a local faster-whisper model directory during transfer:
 
 ```powershell
 yt-2-bili transfer `
-  --cookie cookies.json `
+  --cookie $env:USERPROFILE\cookies.json `
   --generate-subtitles `
   --whisper-path whisper-ctranslate2 `
   --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
@@ -138,6 +174,8 @@ yt-2-bili transfer `
 | `--generate-subtitles` | Generate an SRT file and embed it as a soft subtitle into an MP4. |
 | `--whisper-path` | Path to the Whisper-compatible executable if it is not in `PATH`. |
 | `--whisper-model-directory` | Local model directory for Whisper-compatible CLIs that support `--model_directory`. |
+| `--subtitle-target-language` | Target language for subtitle translation (e.g. `zh`). Requires `--generate-subtitles`. |
+| `--llm-model-name` | LLM model for subtitle translation. Default: `doubao-seed-2-0-pro-260215`. |
 | `--yt-dlp-path` | Path to the `yt-dlp` executable if it is not in `PATH`. |
 | `--biliup-path` | Path to the `biliup` executable if it is not in `PATH`. |
 
