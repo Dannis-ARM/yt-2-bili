@@ -15,22 +15,19 @@ import (
 
 // Options contains all options for running the workflow.
 type Options struct {
-	YouTubeURL        string
-	BiliupCookie      string
-	OutputDir         string
-	Quality           string
-	Tid               int
-	Cleanup           bool
-	ForceDownload     bool
-	GenerateSubtitles bool
-	WhisperPath       string
-	WhisperModel      string
-	WhisperDevice     string
-	WhisperLanguage   string
-	WhisperThreads    int
-	YtDlpPath         string
-	BiliupPath        string
-	ShowProgress      bool
+	YouTubeURL            string
+	BiliupCookie          string
+	OutputDir             string
+	Quality               string
+	Tid                   int
+	Cleanup               bool
+	ForceDownload         bool
+	GenerateSubtitles     bool
+	WhisperPath           string
+	WhisperModelDirectory string
+	YtDlpPath             string
+	BiliupPath            string
+	ShowProgress          bool
 }
 
 // Run executes the full workflow: download YouTube video, then upload to Bilibili.
@@ -77,13 +74,10 @@ func Run(opts Options) error {
 	if opts.GenerateSubtitles {
 		fmt.Println("Generating subtitles...")
 		subtitleResult, err := subtitle.EnsureSoftSubtitled(subtitle.Options{
-			VideoPath:    result.VideoPath,
-			WhisperPath:  opts.WhisperPath,
-			Model:        opts.WhisperModel,
-			Device:       opts.WhisperDevice,
-			Language:     opts.WhisperLanguage,
-			Threads:      opts.WhisperThreads,
-			ShowProgress: opts.ShowProgress,
+			VideoPath:      result.VideoPath,
+			WhisperPath:    opts.WhisperPath,
+			ModelDirectory: opts.WhisperModelDirectory,
+			ShowProgress:   opts.ShowProgress,
 		})
 		if err != nil {
 			return err

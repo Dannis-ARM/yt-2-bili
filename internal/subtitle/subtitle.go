@@ -5,18 +5,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
 type Options struct {
-	VideoPath    string
-	WhisperPath  string
-	Model        string
-	Device       string
-	Language     string
-	Threads      int
-	ShowProgress bool
+	VideoPath      string
+	WhisperPath    string
+	ModelDirectory string
+	ShowProgress   bool
 }
 
 type Result struct {
@@ -123,17 +119,8 @@ func buildWhisperArgs(opts Options) []string {
 		"--output_format", "srt",
 		"--output_dir", filepath.Dir(opts.VideoPath),
 	}
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	if opts.Device != "" {
-		args = append(args, "--device", opts.Device)
-	}
-	if opts.Language != "" {
-		args = append(args, "--language", opts.Language)
-	}
-	if opts.Threads > 0 {
-		args = append(args, "--threads", strconv.Itoa(opts.Threads))
+	if opts.ModelDirectory != "" {
+		args = append(args, "--model_directory", opts.ModelDirectory)
 	}
 	return args
 }

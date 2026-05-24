@@ -19,7 +19,7 @@ Implementing YouTube download and Bilibili upload from scratch would be:
 
 We will use two existing external tools:
 1. **yt-dlp** for downloading YouTube videos and metadata
-2. **biliup-rs** for uploading to Bilibili
+2. **biliup** for uploading to Bilibili
 
 Our Go program will act as a coordinator:
 - Call `yt-dlp` to download video, thumbnail, and metadata

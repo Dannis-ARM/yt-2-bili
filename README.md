@@ -12,9 +12,21 @@ Install these tools first and make sure they are available in `PATH`:
 
 Optional for subtitle generation:
 
-- `whisper`
+- `whisper` or `whisper-ctranslate2`
 - `ffmpeg`
 - `ffprobe`
+
+Install faster Whisper and download the default local model:
+
+```powershell
+.\install-faster-whisper.ps1
+```
+
+The script downloads `Systran/faster-whisper-large-v3` to `E:\Models\faster-whisper-large-v3` via `https://hf-mirror.com` by default. Choose a different model directory with `-LocalDir`, then pass the same path to `--whisper-model-directory` when using `whisper-ctranslate2`.
+
+```powershell
+.\install-faster-whisper.ps1 -LocalDir "D:\Models\faster-whisper-large-v3"
+```
 
 Log in to Bilibili before uploading:
 
@@ -46,6 +58,16 @@ Generate subtitles during download:
 
 ```bash
 yt-2-bili download --generate-subtitles <youtube-url>
+```
+
+Use `whisper-ctranslate2` with a local faster-whisper model directory:
+
+```powershell
+yt-2-bili download `
+  --generate-subtitles `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
+  <youtube-url>
 ```
 
 This creates:
@@ -92,6 +114,17 @@ This downloads the YouTube video, builds a Bilibili description containing the o
 
 With `--generate-subtitles`, it generates `<video-id>.srt`, embeds it into `<video-id>.subtitled.mp4`, and uploads the subtitled MP4.
 
+Use `whisper-ctranslate2` with a local faster-whisper model directory during transfer:
+
+```powershell
+yt-2-bili transfer `
+  --cookie cookies.json `
+  --generate-subtitles `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
+  <youtube-url>
+```
+
 ## Common Options
 
 | Option | Description |
@@ -103,11 +136,8 @@ With `--generate-subtitles`, it generates `<video-id>.srt`, embeds it into `<vid
 | `--cleanup` | Clean up generated files after a successful `transfer`; by default files are kept. |
 | `--force-download` | Download again even if the expected local video file already exists. |
 | `--generate-subtitles` | Generate an SRT file and embed it as a soft subtitle into an MP4. |
-| `--whisper-path` | Path to the `whisper` executable if it is not in `PATH`. |
-| `--whisper-model` | Whisper model name; omitted uses Whisper's default. |
-| `--whisper-device` | Whisper device; omitted uses Whisper's default. |
-| `--whisper-language` | Whisper language; omitted enables auto-detection. |
-| `--whisper-threads` | Whisper CPU thread count; `0` uses Whisper's default. |
+| `--whisper-path` | Path to the Whisper-compatible executable if it is not in `PATH`. |
+| `--whisper-model-directory` | Local model directory for Whisper-compatible CLIs that support `--model_directory`. |
 | `--yt-dlp-path` | Path to the `yt-dlp` executable if it is not in `PATH`. |
 | `--biliup-path` | Path to the `biliup` executable if it is not in `PATH`. |
 

@@ -22,12 +22,9 @@ var (
 	ytDlpPath     string
 	biliupPath    string
 
-	generateSubtitles bool
-	whisperPath       string
-	whisperModel      string
-	whisperDevice     string
-	whisperLanguage   string
-	whisperThreads    int
+	generateSubtitles     bool
+	whisperPath           string
+	whisperModelDirectory string
 
 	uploadTitle  string
 	uploadDesc   string
@@ -127,10 +124,7 @@ func addCommonFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVar(&forceDownload, "force-download", false, "Download again even if the expected video file already exists")
 	cmd.PersistentFlags().BoolVar(&generateSubtitles, "generate-subtitles", false, "Generate SRT subtitles and embed them as soft subtitles into an MP4")
 	cmd.PersistentFlags().StringVar(&whisperPath, "whisper-path", "", "Path to whisper executable (default: look in PATH)")
-	cmd.PersistentFlags().StringVar(&whisperModel, "whisper-model", "", "Whisper model name; omitted uses whisper default")
-	cmd.PersistentFlags().StringVar(&whisperDevice, "whisper-device", "", "Whisper device; omitted uses whisper default")
-	cmd.PersistentFlags().StringVar(&whisperLanguage, "whisper-language", "", "Whisper language; omitted auto-detects")
-	cmd.PersistentFlags().IntVar(&whisperThreads, "whisper-threads", 0, "Whisper CPU thread count; 0 uses whisper default")
+	cmd.PersistentFlags().StringVar(&whisperModelDirectory, "whisper-model-directory", "", "Whisper model directory; passed as --model_directory to compatible CLIs")
 	cmd.PersistentFlags().StringVar(&ytDlpPath, "yt-dlp-path", "", "Path to yt-dlp executable (default: look in PATH)")
 	cmd.PersistentFlags().StringVar(&biliupPath, "biliup-path", "", "Path to biliup executable (default: look in PATH)")
 }
@@ -146,10 +140,7 @@ func resetFlags() {
 	biliupPath = ""
 	generateSubtitles = false
 	whisperPath = ""
-	whisperModel = ""
-	whisperDevice = ""
-	whisperLanguage = ""
-	whisperThreads = 0
+	whisperModelDirectory = ""
 	uploadTitle = ""
 	uploadDesc = ""
 	uploadCover = ""
@@ -245,34 +236,28 @@ func runUpload(videoPath string) error {
 func ensureSubtitles(videoPath string) (*subtitle.Result, error) {
 	fmt.Println("Generating subtitles...")
 	return subtitle.EnsureSoftSubtitled(subtitle.Options{
-		VideoPath:    videoPath,
-		WhisperPath:  whisperPath,
-		Model:        whisperModel,
-		Device:       whisperDevice,
-		Language:     whisperLanguage,
-		Threads:      whisperThreads,
-		ShowProgress: true,
+		VideoPath:      videoPath,
+		WhisperPath:    whisperPath,
+		ModelDirectory: whisperModelDirectory,
+		ShowProgress:   true,
 	})
 }
 
 func runTransfer(youtubeURL string) error {
 	opts := workflow.Options{
-		YouTubeURL:        youtubeURL,
-		BiliupCookie:      cookie,
-		OutputDir:         outputDir,
-		Quality:           quality,
-		Tid:               tid,
-		Cleanup:           cleanup,
-		ForceDownload:     forceDownload,
-		GenerateSubtitles: generateSubtitles,
-		WhisperPath:       whisperPath,
-		WhisperModel:      whisperModel,
-		WhisperDevice:     whisperDevice,
-		WhisperLanguage:   whisperLanguage,
-		WhisperThreads:    whisperThreads,
-		YtDlpPath:         ytDlpPath,
-		BiliupPath:        biliupPath,
-		ShowProgress:      true,
+		YouTubeURL:            youtubeURL,
+		BiliupCookie:          cookie,
+		OutputDir:             outputDir,
+		Quality:               quality,
+		Tid:                   tid,
+		Cleanup:               cleanup,
+		ForceDownload:         forceDownload,
+		GenerateSubtitles:     generateSubtitles,
+		WhisperPath:           whisperPath,
+		WhisperModelDirectory: whisperModelDirectory,
+		YtDlpPath:             ytDlpPath,
+		BiliupPath:            biliupPath,
+		ShowProgress:          true,
 	}
 
 	return workflow.Run(opts)

@@ -25,20 +25,14 @@ func TestBuildWhisperArgsUsesOnlyExplicitOptions(t *testing.T) {
 	}
 }
 
-func TestBuildWhisperArgsAddsOverrides(t *testing.T) {
+func TestBuildWhisperArgsAddsModelDirectory(t *testing.T) {
 	args := buildWhisperArgs(Options{
-		VideoPath: `C:\tmp\abc123.mp4`,
-		Model:     "small",
-		Device:    "cuda",
-		Language:  "en",
-		Threads:   4,
+		VideoPath:      `C:\tmp\abc123.mp4`,
+		ModelDirectory: `E:\Models\faster-whisper-large-v3`,
 	})
 	expected := []string{
 		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
-		"--model", "small",
-		"--device", "cuda",
-		"--language", "en",
-		"--threads", "4",
+		"--model_directory", `E:\Models\faster-whisper-large-v3`,
 	}
 
 	if !reflect.DeepEqual(args, expected) {
