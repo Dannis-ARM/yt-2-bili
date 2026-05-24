@@ -10,7 +10,7 @@ A complete working prototype has been implemented. The tool is functional but ha
 
 yt-2-bili is a Go command-line tool that:
 - Downloads YouTube videos using `yt-dlp`
-- Uploads to Bilibili using `biliup-rs`
+- Uploads to Bilibili using `biliup`
 - Handles metadata (title, description, tags, thumbnail)
 - Adds attribution (original author + YouTube link) to Bilibili description
 
@@ -19,7 +19,7 @@ yt-2-bili is a Go command-line tool that:
 See the repository at `e:\Projects\GoProject\yt-2-bili`:
 - `cmd/yt-2-bili/main.go` - CLI interface using Cobra
 - `internal/ytdlp/` - yt-dlp integration
-- `internal/biliup/` - biliup-rs integration
+- `internal/biliup/` - biliup integration
 - `internal/workflow/` - coordinates the full process
 - `docs/adr/0001-use-external-tools.md` - Architecture Decision Record
 - `CONTEXT.md` - Domain glossary
