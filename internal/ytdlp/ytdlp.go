@@ -43,7 +43,7 @@ func GetVideoInfo(url string, customPath string) (*VideoInfo, error) {
 		path = customPath
 	}
 
-	cmd := exec.Command(path, "-J", "--no-playlist", url)
+	cmd := exec.Command(path, "-J", "--js-runtime", "bun", "--no-playlist", url)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -89,21 +89,22 @@ func DownloadVideo(url string, opts DownloadOptions) (*DownloadResult, error) {
 	outputTemplate := filepath.Join(opts.OutputDir, "%(id)s.%(ext)s")
 
 	// Build format string based on quality
-	format := "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+	format := "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]"
 	if opts.Quality != "" && opts.Quality != "1080p" {
-		// This is a simplification - could be expanded for more quality options
 		switch opts.Quality {
 		case "720p":
-			format = "bestvideo[height<=720]+bestaudio/best[height<=720]"
+			format = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]"
 		case "480p":
-			format = "bestvideo[height<=480]+bestaudio/best[height<=480]"
+			format = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]"
 		case "best":
-			format = "bestvideo+bestaudio/best"
+			format = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 		}
 	}
 
 	args := []string{
 		"-f", format,
+		"--js-runtime", "bun",
+		"--merge-output-format", "mp4",
 		"--write-thumbnail",
 		"-o", outputTemplate,
 		"--no-playlist",
@@ -128,8 +129,10 @@ func DownloadVideo(url string, opts DownloadOptions) (*DownloadResult, error) {
 		return nil, err
 	}
 
-	// Find the video file (we know the ID and ext from info)
-	videoPath := filepath.Join(opts.OutputDir, fmt.Sprintf("%s.%s", info.ID, info.Ext))
+	videoPath := filepath.Join(opts.OutputDir, fmt.Sprintf("%s.mp4", info.ID))
+	if _, err := os.Stat(videoPath); err != nil {
+		videoPath = filepath.Join(opts.OutputDir, fmt.Sprintf("%s.%s", info.ID, info.Ext))
+	}
 
 	// Find the thumbnail file - yt-dlp saves it with the same name but different extension
 	// We need to check common extensions

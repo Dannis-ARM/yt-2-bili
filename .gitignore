@@ -33,3 +33,4 @@ go.work.sum
 
 *.mp4
 sandbox/
+.claude

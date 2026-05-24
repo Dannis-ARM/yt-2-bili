@@ -43,14 +43,14 @@ func Upload(opts UploadOptions) error {
 		path = opts.CustomPath
 	}
 
-	args := []string{"upload"}
+	args := []string{}
 
-	// Add cookie path if specified
 	if opts.UserCookiePath != "" {
 		args = append(args, "--user-cookie", opts.UserCookiePath)
 	}
 
-	// Add upload options
+	args = append(args, "upload")
+
 	if opts.Title != "" {
 		args = append(args, "--title", opts.Title)
 	}
