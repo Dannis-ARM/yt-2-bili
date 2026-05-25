@@ -101,6 +101,10 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 		if !isNonEmptyFile(srtPath) {
 			return nil, fmt.Errorf("whisper finished but subtitle file was not created: %s", srtPath)
 		}
+		// Apply sentence breaking to newly generated SRT
+		if err := applySentenceBreaking(srtPath); err != nil {
+			return nil, err
+		}
 	}
 	result.ReusedSubtitle = reusedSubtitle
 	result.GeneratedSourceSubtitle = !reusedSubtitle
@@ -124,11 +128,13 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := validateTranslatedSRT(string(sourceData), string(translatedData)); err != nil {
-			return nil, err
+		if err := validateTranslatedSRT(string(sourceData), string(translatedData)); err == nil {
+			result.ReusedChineseSubtitle = true
+			return result, nil
 		}
-		result.ReusedChineseSubtitle = true
-		return result, nil
+		// Validation failed — likely because source SRT was re-generated with
+		// sentence breaking. Invalidate the stale translation and re-translate.
+		_ = os.Remove(zhPath)
 	}
 
 	if opts.Translator == nil {

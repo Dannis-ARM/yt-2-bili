@@ -52,6 +52,9 @@ A video file that contains a Chinese Subtitle as its Soft Subtitle track. Used f
 ## Whisper
 A local speech-to-text tool used to generate subtitles from downloaded video audio.
 
+## Sentence Breaking
+Post-processing that splits long subtitle entries into shorter ones by punctuation, maximum duration, and maximum character count. Applied to the Source Subtitle immediately after Whisper generates the SRT, before translation.
+
 ## yt-2-bili
 A command-line tool written in Go that downloads YouTube Videos and uploads them to Bilibili.
 
