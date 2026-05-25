@@ -13,6 +13,8 @@ type Options struct {
 	VideoPath              string
 	WhisperPath            string
 	ModelDirectory         string
+	WhisperDevice          string
+	WhisperComputeType     string
 	SubtitleTargetLanguage string
 	Translator             Translator
 	ShowProgress           bool
@@ -188,9 +190,19 @@ func buildWhisperArgs(opts Options) []string {
 		opts.VideoPath,
 		"--output_format", "srt",
 		"--output_dir", filepath.Dir(opts.VideoPath),
+		"--batched", "True",
+		"--vad_filter", "True",
+	}
+	if opts.WhisperComputeType != "" {
+		args = append(args, "--compute_type", opts.WhisperComputeType)
+	} else {
+		args = append(args, "--compute_type", "int8")
 	}
 	if opts.ModelDirectory != "" {
 		args = append(args, "--model_directory", opts.ModelDirectory)
+	}
+	if opts.WhisperDevice != "" {
+		args = append(args, "--device", opts.WhisperDevice)
 	}
 	return args
 }

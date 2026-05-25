@@ -1,83 +1,60 @@
 # yt-2-bili Handoff Document
 
-Date: 2026-05-25
+Date: 2026-05-26
 
 ## Current Status
 
-Chinese subtitle translation via Doubao (Volcengine Ark API) has been implemented and all unit tests pass. The feature is wired through the CLI and workflow, but has NOT been end-to-end tested against the real API.
+Whisper performance optimization has been implemented and all tests pass. The changes add default optimization parameters and two new CLI flags for device and compute type configuration.
 
 ## What Changed Since Last Handoff
 
-### Chinese subtitle translation (`--subtitle-target-language zh`)
+### Whisper Performance Optimization
 
-Added a streaming LLM translation path that runs after Whisper produces `<video-id>.srt`:
+Added default optimization parameters to `whisper-ctranslate2` invocation and new CLI flags for customizing behavior:
 
-- **New file**: `internal/subtitle/translator.go` — Ark/OpenAI-compatible HTTP streaming client with SRT batching, validation, and retry logic.
-- **Modified**: `internal/subtitle/subtitle.go` — `Options` now has `SubtitleTargetLanguage` and `Translator` (interface); `Result` has `ChineseSubtitlePath` and `ReusedChineseSubtitle`; new `prepareSubtitleFiles` handles the full source/chinese subtitle file lifecycle.
-- **Modified**: `internal/workflow/workflow.go` — `Options` has `SubtitleTargetLanguage` and `Translator`; passes them through to subtitle and cleans up Chinese subtitle artifacts.
-- **Modified**: `cmd/yt-2-bili/main.go` — new flags `--subtitle-target-language` and `--llm-model-name`; `validateFlags` enforces target-language requires generate-subtitles; `makeTranslator` reads `ARK_API_KEY` from env.
-- **New ADR**: `docs/adr/0002-translate-subtitles-with-doubao.md` captures the full design rationale.
-- **Updated**: `README.md` and `CONTEXT.md`.
+- **Modified**: `internal/subtitle/subtitle.go` - Added `WhisperDevice` and `WhisperComputeType` to `Options`; updated `buildWhisperArgs` to include:
+  - `--compute_type int8` (default, can be overridden)
+  - `--batched True`
+  - `--vad_filter True`
+- **Modified**: `cmd/yt-2-bili/main.go` - Added two new persistent flags:
+  - `--whisper-device`: Passed as `--device` to whisper CLI (e.g. `cpu`, `cuda`)
+  - `--whisper-compute-type`: Overrides default `int8` (e.g. `float32`, `float16`)
+- **Modified**: `internal/workflow/workflow.go` - Added fields to `Options` and pass-through to subtitle generation
+- **Updated**: `README.md` - Added documentation for new flags and optimization notes
+- **Updated**: `internal/subtitle/subtitle_test.go` - Added tests for new parameter ordering and device/compute-type flags
 
-### Key design decisions (see ADR for full rationale)
+### Usage Examples
 
-- `--subtitle-target-language` requires `--generate-subtitles` (validated early, before external calls)
-- Only `zh` (Simplified Chinese) is supported; other values error out
-- `ARK_API_KEY` env var is required only when translation is requested; missing key stops execution
-- Default model: `doubao-seed-2-0-pro-260215`, base URL hardcoded to `https://ark.cn-beijing.volces.com/api/coding/v3`
-- Translation in batches of 120,000 chars, preserves SRT block boundaries
-- Each batch: 5 min timeout, up to 3 attempts for network/5xx/429/structure errors; 4xx not retried
-- All outputs written via temp files, replaced atomically after validation
-- Chinese SRT reused only when block count, numbering, and timelines match source SRT exactly
-- Chinese subtitle embedding uses `mov_text` soft subtitles
+Default optimized mode (int8, batched, vad_filter):
+```powershell
+yt-2-bili download --generate-subtitles --whisper-model-directory "E:\Models\faster-whisper-large-v3" <youtube-url>
+```
 
-### File naming convention
-
-| Artifact | Path |
-|---|---|
-| Source SRT | `<video-id>.srt` |
-| Chinese SRT | `<video-id>.zh.srt` |
-| Source subtitled MP4 | `<video-id>.subtitled.mp4` |
-| Chinese subtitled MP4 | `<video-id>.zh.subtitled.mp4` |
+CPU with float32 for better accuracy (6800X3D/7800X3D):
+```powershell
+yt-2-bili download --generate-subtitles --whisper-device cpu --whisper-compute-type float32 --whisper-model-directory "E:\Models\faster-whisper-large-v3" <youtube-url>
+```
 
 ## Validation Already Run
 
 ```text
 go test ./...
-go build -o yt-2-bili.exe ./cmd/yt-2-bili
 ```
 
-All pass. Tests cover:
-- `TestTranslatorStreamsChineseSRT` — basic streaming translation
-- `TestTranslatorRejectsChangedTimeline` — timeline mismatch rejection
-- `TestTranslatorSplitsBatchesWithoutSplittingBlocks` — batch splitting with mock
-- `TestTranslatorRetriesInvalidStructure` — retry on structure validation failure
-- `TestTranslatorDoesNotRetryAuthenticationErrors` — 4xx stops immediately
-- `TestEnsureSoftSubtitledReusesValidatedChineseSubtitle` — reuse logic
-- `TestPrepareSubtitleFilesTranslatesWhenNoChineseSRT` — translator invocation
-- `TestSubtitleTargetLanguageRequiresGenerateSubtitles` — CLI flag validation
+All pass. Tests cover the new parameter behavior.
 
 ## Known Issues / Watch Items
 
-- **Not end-to-end tested**: The translation path has only been tested against fake SSE servers. Real Ark API integration has not been verified.
-- Subtitled MP4 reuse logic changed for Chinese mode: old `subtitled.mp4` is NOT reused when `--subtitle-target-language zh` is set, even if it has a subtitle stream. This avoids uploading the wrong subtitle language.
-- Whisper model download (from previous handoff) still needs validation.
-- Bilibili soft subtitle acceptance (from previous handoff) still needs validation.
+- **No DirectML support**: User's `whisper-ctranslate2` only supports `auto`, `cpu`, `cuda`; no DirectML option for AMD GPU (7900GRE). Currently stuck on CPU.
+- **Performance baseline**: User reported 10 minutes to process 10 minutes of video with large-v3 on CPU before optimization.
 
 ## Suggested Next Steps
 
-1. End-to-end test with real Ark API:
-   ```powershell
-   $env:ARK_API_KEY = "your-key"
-   .\yt-2-bili.exe transfer --generate-subtitles --subtitle-target-language zh --cookie $env:USERPROFILE\cookies.json https://www.youtube.com/watch?v=mGEfasQl2Zo
-   ```
-2. Run the Python integration test script (update `subtitles.py` to pass `--subtitle-target-language zh`).
-3. Verify Bilibili accepts the `.zh.subtitled.mp4` with soft subtitles.
-4. Test edge cases: very long video (multi-batch), network interruption mid-stream, corrupted API response.
+1. Test the new optimized default settings and see if performance improves from the 1x realtime baseline.
+2. Explore alternative Whisper implementations that support AMD GPU on Windows (e.g. DirectML-optimized versions).
+3. Consider adding model size option (medium/small) for faster transcription when quality trade-off is acceptable.
 
 ## Suggested Skills
 
-- `/tdd` — if adding more tests around translation edge cases or adding support for more target languages
-- `/verify` — to manually test the implemented feature with real API and check Bilibili acceptance
-- `/review` — before opening a pull request
-- `/simplify` — after real-world testing, to tighten the streaming client and batch logic
+- `/verify` - Test the new optimization parameters with a real video file
+- `/simplify` - After real-world testing, review if any further parameter tuning is needed

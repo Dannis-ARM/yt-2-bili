@@ -25,6 +25,8 @@ type Options struct {
 	GenerateSubtitles      bool
 	WhisperPath            string
 	WhisperModelDirectory  string
+	WhisperDevice          string
+	WhisperComputeType     string
 	SubtitleTargetLanguage string
 	Translator             subtitle.Translator
 	YtDlpPath              string
@@ -75,6 +77,8 @@ func Run(opts Options) error {
 			VideoPath:              result.VideoPath,
 			WhisperPath:            opts.WhisperPath,
 			ModelDirectory:         opts.WhisperModelDirectory,
+			WhisperDevice:          opts.WhisperDevice,
+			WhisperComputeType:     opts.WhisperComputeType,
 			SubtitleTargetLanguage: opts.SubtitleTargetLanguage,
 			Translator:             opts.Translator,
 			ShowProgress:           opts.ShowProgress,

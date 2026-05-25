@@ -32,7 +32,7 @@ func TestSubtitleOutputPaths(t *testing.T) {
 
 func TestBuildWhisperArgsUsesOnlyExplicitOptions(t *testing.T) {
 	args := buildWhisperArgs(Options{VideoPath: `C:\tmp\abc123.mp4`})
-	expected := []string{`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`}
+	expected := []string{`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`, "--batched", "True", "--vad_filter", "True", "--compute_type", "int8"}
 
 	if !reflect.DeepEqual(args, expected) {
 		t.Fatalf("unexpected args:\nwant: %#v\n got: %#v", expected, args)
@@ -120,7 +120,25 @@ func TestBuildWhisperArgsAddsModelDirectory(t *testing.T) {
 	})
 	expected := []string{
 		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
+		"--batched", "True", "--vad_filter", "True", "--compute_type", "int8",
 		"--model_directory", `E:\Models\faster-whisper-large-v3`,
+	}
+
+	if !reflect.DeepEqual(args, expected) {
+		t.Fatalf("unexpected args:\nwant: %#v\n got: %#v", expected, args)
+	}
+}
+
+func TestBuildWhisperArgsAddsDeviceAndComputeType(t *testing.T) {
+	args := buildWhisperArgs(Options{
+		VideoPath:          `C:\tmp\abc123.mp4`,
+		WhisperDevice:      "cuda",
+		WhisperComputeType: "float16",
+	})
+	expected := []string{
+		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
+		"--batched", "True", "--vad_filter", "True", "--compute_type", "float16",
+		"--device", "cuda",
 	}
 
 	if !reflect.DeepEqual(args, expected) {

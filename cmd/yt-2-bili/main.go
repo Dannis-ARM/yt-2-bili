@@ -22,11 +22,13 @@ var (
 	ytDlpPath     string
 	biliupPath    string
 
-	generateSubtitles     bool
-	whisperPath           string
-	whisperModelDirectory string
+	generateSubtitles      bool
+	whisperPath            string
+	whisperModelDirectory  string
+	whisperDevice          string
+	whisperComputeType     string
 	subtitleTargetLanguage string
-	llmModelName          string
+	llmModelName           string
 
 	uploadTitle  string
 	uploadDesc   string
@@ -127,6 +129,8 @@ func addCommonFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVar(&generateSubtitles, "generate-subtitles", false, "Generate SRT subtitles and embed them as soft subtitles into an MP4")
 	cmd.PersistentFlags().StringVar(&whisperPath, "whisper-path", "", "Path to whisper executable (default: look in PATH)")
 	cmd.PersistentFlags().StringVar(&whisperModelDirectory, "whisper-model-directory", "", "Whisper model directory; passed as --model_directory to compatible CLIs")
+	cmd.PersistentFlags().StringVar(&whisperDevice, "whisper-device", "", "Whisper device (auto, cpu, cuda); passed as --device to compatible CLIs")
+	cmd.PersistentFlags().StringVar(&whisperComputeType, "whisper-compute-type", "", "Whisper compute type (int8, float16, float32); overrides default int8")
 	cmd.PersistentFlags().StringVar(&subtitleTargetLanguage, "subtitle-target-language", "", "Target language for subtitle translation (e.g. zh); requires --generate-subtitles")
 	cmd.PersistentFlags().StringVar(&llmModelName, "llm-model-name", "doubao-seed-2-0-pro-260215", "LLM model name for subtitle translation")
 	cmd.PersistentFlags().StringVar(&ytDlpPath, "yt-dlp-path", "", "Path to yt-dlp executable (default: look in PATH)")
@@ -145,6 +149,8 @@ func resetFlags() {
 	generateSubtitles = false
 	whisperPath = ""
 	whisperModelDirectory = ""
+	whisperDevice = ""
+	whisperComputeType = ""
 	subtitleTargetLanguage = ""
 	llmModelName = "doubao-seed-2-0-pro-260215"
 	uploadTitle = ""
@@ -262,6 +268,8 @@ func ensureSubtitles(videoPath string) (*subtitle.Result, error) {
 		VideoPath:              videoPath,
 		WhisperPath:            whisperPath,
 		ModelDirectory:         whisperModelDirectory,
+		WhisperDevice:          whisperDevice,
+		WhisperComputeType:     whisperComputeType,
 		SubtitleTargetLanguage: subtitleTargetLanguage,
 		Translator:             translator,
 		ShowProgress:           true,
@@ -302,6 +310,8 @@ func runTransfer(youtubeURL string) error {
 		GenerateSubtitles:      generateSubtitles,
 		WhisperPath:            whisperPath,
 		WhisperModelDirectory:  whisperModelDirectory,
+		WhisperDevice:          whisperDevice,
+		WhisperComputeType:     whisperComputeType,
 		SubtitleTargetLanguage: subtitleTargetLanguage,
 		Translator:             translator,
 		YtDlpPath:              ytDlpPath,

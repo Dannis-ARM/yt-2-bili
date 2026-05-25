@@ -70,6 +70,18 @@ yt-2-bili download `
   <youtube-url>
 ```
 
+Optimize for CPU (6800X3D/7800X3D) with `float32` for better accuracy:
+
+```powershell
+yt-2-bili download `
+  --generate-subtitles `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
+  --whisper-device cpu `
+  --whisper-compute-type float32 `
+  <youtube-url>
+```
+
 This creates:
 
 ```text
@@ -174,10 +186,14 @@ yt-2-bili transfer `
 | `--generate-subtitles` | Generate an SRT file and embed it as a soft subtitle into an MP4. |
 | `--whisper-path` | Path to the Whisper-compatible executable if it is not in `PATH`. |
 | `--whisper-model-directory` | Local model directory for Whisper-compatible CLIs that support `--model_directory`. |
+| `--whisper-device` | Device for Whisper (e.g. `cpu`, `cuda`). Passed as `--device` if set. |
+| `--whisper-compute-type` | Compute type for Whisper (e.g. `int8`, `float16`, `float32`). Overrides default `int8`. |
 | `--subtitle-target-language` | Target language for subtitle translation (e.g. `zh`). Requires `--generate-subtitles`. |
 | `--llm-model-name` | LLM model for subtitle translation. Default: `doubao-seed-2-0-pro-260215`. |
 | `--yt-dlp-path` | Path to the `yt-dlp` executable if it is not in `PATH`. |
 | `--biliup-path` | Path to the `biliup` executable if it is not in `PATH`. |
+
+**Whisper Optimization**: By default, `--compute_type int8`, `--batched True`, and `--vad_filter True` are used for faster transcription.
 
 ## Integration Tests
 
@@ -239,3 +255,33 @@ python integration-tests\e2e.py C:\path\to\cookies.json https://www.youtube.com/
 - Playlist URLs are not supported yet.
 - Uploads use copyright mode `2`, meaning reupload/repost.
 - The Bilibili source field is set to the original YouTube URL during `transfer`.
+
+## Whisper Test
+
+Test direct `whisper-ctranslate2` invocation (same options as yt-2-bili uses by default):
+
+```powershell
+whisper-ctranslate2 `
+  "E:\Projects\GoProject\yt-2-bili\sandbox\01.mp4" `
+  --model_directory "E:\Models\faster-whisper-large-v3" `
+  --output_format srt `
+  --output_dir "E:\Projects\GoProject\yt-2-bili\sandbox" `
+  --device cpu `
+  --compute_type int8 `
+  --batched True `
+  --vad_filter True
+```
+
+For better accuracy with 6800X3D/7800X3D (slower), use `float32`:
+
+```powershell
+whisper-ctranslate2 `
+  "E:\Projects\GoProject\yt-2-bili\sandbox\01.mp4" `
+  --model_directory "E:\Models\faster-whisper-large-v3" `
+  --output_format srt `
+  --output_dir "E:\Projects\GoProject\yt-2-bili\sandbox" `
+  --device cpu `
+  --compute_type float32 `
+  --batched True `
+  --vad_filter True
+```
