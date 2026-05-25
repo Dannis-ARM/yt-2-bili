@@ -22,6 +22,7 @@ type Options struct {
 	Tid                    int
 	Cleanup                bool
 	ForceDownload          bool
+	ForceSubtitles         bool
 	GenerateSubtitles      bool
 	WhisperPath            string
 	WhisperModelDirectory  string
@@ -82,6 +83,7 @@ func Run(opts Options) error {
 			SubtitleTargetLanguage: opts.SubtitleTargetLanguage,
 			Translator:             opts.Translator,
 			ShowProgress:           opts.ShowProgress,
+			Force:                  opts.ForceSubtitles,
 		})
 		if err != nil {
 			return err

@@ -19,6 +19,7 @@ var (
 	tid           int
 	cleanup       bool
 	forceDownload bool
+	forceSubtitles bool
 	ytDlpPath     string
 	biliupPath    string
 
@@ -70,7 +71,7 @@ Examples:
 	}
 
 	addCommonFlags(rootCmd)
-	rootCmd.AddCommand(newDownloadCmd(), newUploadCmd(), newTransferCmd())
+	rootCmd.AddCommand(newDownloadCmd(), newUploadCmd(), newTransferCmd(), newSubtitleCmd())
 
 	return rootCmd
 }
@@ -119,6 +120,19 @@ func newTransferCmd() *cobra.Command {
 	return cmd
 }
 
+func newSubtitleCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "subtitle <video-file>",
+		Short: "Generate subtitles for a local video file",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			prepareDefaults()
+			return runSubtitle(args[0])
+		},
+	}
+	return cmd
+}
+
 func addCommonFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVarP(&cookie, "cookie", "c", "", "Path to biliup cookies.json (default: cookies.json in current directory)")
 	cmd.PersistentFlags().StringVarP(&outputDir, "output-dir", "o", "", fmt.Sprintf("Directory to save downloaded files (default: %s)", workflow.DefaultOutputDir()))
@@ -126,6 +140,7 @@ func addCommonFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().IntVarP(&tid, "tid", "t", 171, "Bilibili投稿分区 (default: 171 游戏区)")
 	cmd.PersistentFlags().BoolVar(&cleanup, "cleanup", false, "Clean up generated files after a successful transfer")
 	cmd.PersistentFlags().BoolVar(&forceDownload, "force-download", false, "Download again even if the expected video file already exists")
+	cmd.PersistentFlags().BoolVar(&forceSubtitles, "force-subtitles", false, "Force regenerate subtitles even if files already exist")
 	cmd.PersistentFlags().BoolVar(&generateSubtitles, "generate-subtitles", false, "Generate SRT subtitles and embed them as soft subtitles into an MP4")
 	cmd.PersistentFlags().StringVar(&whisperPath, "whisper-path", "", "Path to whisper executable (default: look in PATH)")
 	cmd.PersistentFlags().StringVar(&whisperModelDirectory, "whisper-model-directory", "", "Whisper model directory; passed as --model_directory to compatible CLIs")
@@ -144,6 +159,7 @@ func resetFlags() {
 	tid = 171
 	cleanup = false
 	forceDownload = false
+	forceSubtitles = false
 	ytDlpPath = ""
 	biliupPath = ""
 	generateSubtitles = false
@@ -171,15 +187,36 @@ func prepareDefaults() {
 	}
 }
 
-func validateFlags() error {
-	if subtitleTargetLanguage != "" && !generateSubtitles {
+func validateFlags(isSubtitleCommand bool) error {
+	if !isSubtitleCommand && !generateSubtitles {
+		// Check that whisper-related flags aren't used without --generate-subtitles
+		if whisperPath != "" {
+			return fmt.Errorf("--whisper-path requires --generate-subtitles")
+		}
+		if whisperModelDirectory != "" {
+			return fmt.Errorf("--whisper-model-directory requires --generate-subtitles")
+		}
+		if whisperDevice != "" {
+			return fmt.Errorf("--whisper-device requires --generate-subtitles")
+		}
+		if whisperComputeType != "" {
+			return fmt.Errorf("--whisper-compute-type requires --generate-subtitles")
+		}
+		if subtitleTargetLanguage != "" {
+			return fmt.Errorf("--subtitle-target-language requires --generate-subtitles")
+		}
+		if llmModelName != "doubao-seed-2-0-pro-260215" {
+			return fmt.Errorf("--llm-model-name requires --generate-subtitles")
+		}
+	}
+	if subtitleTargetLanguage != "" && !generateSubtitles && !isSubtitleCommand {
 		return fmt.Errorf("--subtitle-target-language requires --generate-subtitles")
 	}
 	return nil
 }
 
 func runDownload(youtubeURL string) error {
-	if err := validateFlags(); err != nil {
+	if err := validateFlags(false); err != nil {
 		return err
 	}
 	if err := ytdlp.CheckAvailable(ytDlpPath); err != nil {
@@ -224,7 +261,7 @@ func runDownload(youtubeURL string) error {
 }
 
 func runUpload(videoPath string) error {
-	if err := validateFlags(); err != nil {
+	if err := validateFlags(false); err != nil {
 		return err
 	}
 	if generateSubtitles {
@@ -273,6 +310,7 @@ func ensureSubtitles(videoPath string) (*subtitle.Result, error) {
 		SubtitleTargetLanguage: subtitleTargetLanguage,
 		Translator:             translator,
 		ShowProgress:           true,
+		Force:                  forceSubtitles,
 	})
 }
 
@@ -292,7 +330,7 @@ func makeTranslator() (subtitle.Translator, error) {
 }
 
 func runTransfer(youtubeURL string) error {
-	if err := validateFlags(); err != nil {
+	if err := validateFlags(false); err != nil {
 		return err
 	}
 	translator, err := makeTranslator()
@@ -307,6 +345,7 @@ func runTransfer(youtubeURL string) error {
 		Tid:                    tid,
 		Cleanup:                cleanup,
 		ForceDownload:          forceDownload,
+		ForceSubtitles:         forceSubtitles,
 		GenerateSubtitles:      generateSubtitles,
 		WhisperPath:            whisperPath,
 		WhisperModelDirectory:  whisperModelDirectory,
@@ -320,6 +359,27 @@ func runTransfer(youtubeURL string) error {
 	}
 
 	return workflow.Run(opts)
+}
+
+func runSubtitle(videoPath string) error {
+	if err := validateFlags(true); err != nil {
+		return err
+	}
+	if err := subtitle.CheckAvailable(whisperPath); err != nil {
+		return fmt.Errorf("dependency check failed: %w", err)
+	}
+
+	subtitleResult, err := ensureSubtitles(videoPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Generated subtitle: %s\n", subtitleResult.SubtitlePath)
+	if subtitleResult.ChineseSubtitlePath != "" {
+		fmt.Printf("Generated Chinese subtitle: %s\n", subtitleResult.ChineseSubtitlePath)
+	}
+	fmt.Printf("Generated subtitled video: %s\n", subtitleResult.SubtitledVideoPath)
+	return nil
 }
 
 func splitTags(tags string) []string {

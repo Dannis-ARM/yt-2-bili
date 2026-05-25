@@ -90,6 +90,52 @@ This creates:
 <video-id>.subtitled.mp4
 ```
 
+### Generate subtitles for local video
+
+```bash
+yt-2-bili subtitle <video-file>
+```
+
+Generate subtitles for a local video file without downloading or uploading. This is useful for batch processing videos locally before uploading.
+
+Use `whisper-ctranslate2` with a local faster-whisper model directory:
+
+```powershell
+yt-2-bili subtitle `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
+  video.mp4
+```
+
+Translate subtitles to Simplified Chinese:
+
+```powershell
+$env:ARK_API_KEY = "your-api-key"
+
+yt-2-bili subtitle `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
+  --subtitle-target-language zh `
+  video.mp4
+```
+
+Force regenerate subtitles even if files already exist:
+
+```powershell
+yt-2-bili subtitle `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
+  --subtitle-target-language zh `
+  --force-subtitles `
+  video.mp4
+```
+
+This creates:
+- `<video-id>.srt` - Source subtitles
+- `<video-id>.zh.srt` - Chinese subtitles (if translated)
+- `<video-id>.subtitled.mp4` - Video with soft subtitles
+- `<video-id>.zh.subtitled.mp4` - Video with Chinese soft subtitles (if translated)
+
 #### Translate subtitles to Simplified Chinese
 
 When `--subtitle-target-language zh` is set with `--generate-subtitles`, the source SRT is sent to Doubao via the Volcengine Ark API for translation. Each batch preserves block count, numbering, and time ranges exactly; translation failure stops the upload.
@@ -183,6 +229,7 @@ yt-2-bili transfer `
 | `-t, --tid` | Bilibili category ID. Default: `171`. |
 | `--cleanup` | Clean up generated files after a successful `transfer`; by default files are kept. |
 | `--force-download` | Download again even if the expected local video file already exists. |
+| `--force-subtitles` | Force regenerate subtitles even if files already exist. |
 | `--generate-subtitles` | Generate an SRT file and embed it as a soft subtitle into an MP4. |
 | `--whisper-path` | Path to the Whisper-compatible executable if it is not in `PATH`. |
 | `--whisper-model-directory` | Local model directory for Whisper-compatible CLIs that support `--model_directory`. |

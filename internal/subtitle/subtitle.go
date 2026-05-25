@@ -18,6 +18,7 @@ type Options struct {
 	SubtitleTargetLanguage string
 	Translator             Translator
 	ShowProgress           bool
+	Force                  bool
 }
 
 type Result struct {
@@ -57,7 +58,7 @@ func EnsureSoftSubtitled(opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	if hasSubtitleStream(result.SubtitledVideoPath) && opts.SubtitleTargetLanguage == "" {
+	if !opts.Force && hasSubtitleStream(result.SubtitledVideoPath) && opts.SubtitleTargetLanguage == "" {
 		result.ReusedSubtitled = true
 		return result, nil
 	}
@@ -82,6 +83,14 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 		OriginalVideoPath:  opts.VideoPath,
 		SubtitlePath:       srtPath,
 		SubtitledVideoPath: subtitledVideoPath(opts.VideoPath),
+	}
+
+	// Delete existing files if force is enabled
+	if opts.Force {
+		_ = os.Remove(srtPath)
+		_ = os.Remove(chineseSubtitlePath(opts.VideoPath))
+		_ = os.Remove(subtitledVideoPath(opts.VideoPath))
+		_ = os.Remove(chineseSubtitledVideoPath(opts.VideoPath))
 	}
 
 	reusedSubtitle := isNonEmptyFile(srtPath)
