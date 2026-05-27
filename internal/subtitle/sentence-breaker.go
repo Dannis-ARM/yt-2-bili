@@ -14,8 +14,14 @@ const (
 	maxDurationPerEntry = 5 * time.Second
 )
 
-var sentenceEndPunct = map[rune]bool{'.': true, '!': true, '?': true}
+type timedSegment struct {
+	text  string
+	start time.Duration
+	end   time.Duration
+}
 
+// BreakSentences is a safety net that only splits blocks exceeding maxCharsPerEntry or maxDurationPerEntry.
+// It trusts that whisper-ctranslate2 has already done proper sentence segmentation via its configuration.
 func BreakSentences(srt string) (string, error) {
 	blocks, err := parseSRTBlocks(srt)
 	if err != nil {
@@ -28,7 +34,7 @@ func BreakSentences(srt string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("sentence breaking: %w", err)
 		}
-		splitBlocks := breakBlock(block, start, end)
+		splitBlocks := splitBlockIfNeeded(block, start, end)
 		result = append(result, splitBlocks...)
 	}
 
@@ -40,203 +46,84 @@ func BreakSentences(srt string) (string, error) {
 	return joinSRTBlocks(result), nil
 }
 
-func breakBlock(block srtBlock, start, end time.Duration) []srtBlock {
-	fullText := strings.Join(extractTextLines(block.Raw), " ")
+func splitBlockIfNeeded(block srtBlock, start, end time.Duration) []srtBlock {
+	text := strings.Join(extractTextLines(block.Raw), " ")
 	duration := end - start
-	if duration <= 0 {
-		duration = 1
-	}
+	chars := charCount(text)
 
-	if duration <= maxDurationPerEntry && charCount(fullText) <= maxCharsPerEntry {
+	if duration <= maxDurationPerEntry && chars <= maxCharsPerEntry {
 		return []srtBlock{block}
 	}
 
-	segments := splitBySentenceEnd(fullText)
-	segments = splitLongByChars(segments)
-
-	totalChars := 0
-	for _, seg := range segments {
-		totalChars += seg.chars
+	numParts := 1
+	if chars > maxCharsPerEntry {
+		numParts = (chars + maxCharsPerEntry - 1) / maxCharsPerEntry
 	}
-	if totalChars == 0 {
+	if duration > maxDurationPerEntry {
+		durationParts := int(math.Ceil(float64(duration) / float64(maxDurationPerEntry)))
+		if durationParts > numParts {
+			numParts = durationParts
+		}
+	}
+
+	if numParts <= 1 {
 		return []srtBlock{block}
 	}
 
-	timed := allocateTimecodes(segments, start, end, totalChars)
-	timed = splitLongByDuration(timed)
-
-	result := make([]srtBlock, len(timed))
-	for i, t := range timed {
-		result[i] = srtBlock{
-			Timeline: formatSRTTimeline(t.start, t.end),
-			Raw:      "0\n" + formatSRTTimeline(t.start, t.end) + "\n" + t.text,
-		}
-	}
-	return result
+	return splitBlockEvenly(text, start, end, numParts)
 }
 
-type textSegment struct {
-	text  string
-	chars int
-}
-
-type timedSegment struct {
-	text  string
-	start time.Duration
-	end   time.Duration
-}
-
-func splitBySentenceEnd(text string) []textSegment {
-	var segments []textSegment
-	current := strings.Builder{}
+func splitBlockEvenly(text string, start, end time.Duration, numParts int) []srtBlock {
 	runes := []rune(text)
+	totalChars := len(runes)
+	totalDuration := end - start
+	charsPerPart := (totalChars + numParts - 1) / numParts
+	durationPerPart := totalDuration / time.Duration(numParts)
 
-	for i, r := range runes {
-		current.WriteRune(r)
-		if sentenceEndPunct[r] && i+1 < len(runes) && runes[i+1] == ' ' {
-			segments = append(segments, trimmedSegment(current.String()))
-			current.Reset()
-		}
-	}
-	remaining := strings.TrimSpace(current.String())
-	if remaining != "" {
-		segments = append(segments, trimmedSegment(remaining))
-	}
-	return segments
-}
-
-func trimmedSegment(s string) textSegment {
-	t := strings.TrimSpace(s)
-	return textSegment{text: t, chars: charCount(t)}
-}
-
-func splitLongByChars(segments []textSegment) []textSegment {
-	var result []textSegment
-	for _, seg := range segments {
-		if seg.chars == 0 {
-			continue
-		}
-		if seg.chars <= maxCharsPerEntry {
-			result = append(result, seg)
-			continue
-		}
-		result = append(result, hardSplit(seg)...)
-	}
-	return result
-}
-
-func hardSplit(seg textSegment) []textSegment {
-	var result []textSegment
-	remaining := seg.text
-
-	for charCount(remaining) > maxCharsPerEntry {
-		splitAt := findBestSplit(remaining)
-		runes := []rune(remaining)
-		if splitAt <= 0 || splitAt > len(runes) {
-			splitAt = maxCharsPerEntry
-			if splitAt > len(runes) {
-				splitAt = len(runes)
-			}
-		}
-		left := strings.TrimSpace(string(runes[:splitAt]))
-		remaining = strings.TrimSpace(string(runes[splitAt:]))
-		if left != "" {
-			result = append(result, trimmedSegment(left))
-		}
-	}
-	if t := strings.TrimSpace(remaining); t != "" {
-		result = append(result, trimmedSegment(t))
-	}
-	return result
-}
-
-func findBestSplit(text string) int {
-	runes := []rune(text)
-	limit := maxCharsPerEntry
-	if limit > len(runes) {
-		limit = len(runes)
-	}
-
-	searchStart := limit / 2
-	for i := limit - 1; i >= searchStart; i-- {
-		if runes[i] == ',' && i+1 < len(runes) && runes[i+1] == ' ' {
-			return i + 2
-		}
-		if runes[i] == ',' {
-			return i + 1
-		}
-	}
-	for i := limit - 1; i >= searchStart; i-- {
-		if runes[i] == ' ' {
-			return i + 1
-		}
-	}
-	return 0
-}
-
-func allocateTimecodes(segments []textSegment, start, end time.Duration, totalChars int) []timedSegment {
-	result := make([]timedSegment, 0, len(segments))
+	var result []timedSegment
 	current := start
-	duration := end - start
+	charPos := 0
 
-	for i, seg := range segments {
-		if seg.chars == 0 {
-			continue
+	for i := 0; i < numParts; i++ {
+		if charPos >= totalChars {
+			break
 		}
-		segDuration := time.Duration(float64(duration) * float64(seg.chars) / float64(totalChars))
-		segEnd := current + segDuration
-		if i == len(segments)-1 {
-			segEnd = end
-		}
-		if segEnd > end {
-			segEnd = end
-		}
-		result = append(result, timedSegment{text: seg.text, start: current, end: segEnd})
-		current = segEnd
-	}
-	return result
-}
 
-func splitLongByDuration(segments []timedSegment) []timedSegment {
-	var result []timedSegment
-	for _, seg := range segments {
-		duration := seg.end - seg.start
-		if duration <= maxDurationPerEntry || charCount(seg.text) <= 1 {
-			result = append(result, seg)
-			continue
+		partChars := charsPerPart
+		if charPos+partChars > totalChars {
+			partChars = totalChars - charPos
 		}
-		result = append(result, splitByDuration(seg)...)
-	}
-	return result
-}
 
-func splitByDuration(seg timedSegment) []timedSegment {
-	duration := seg.end - seg.start
-	n := int(math.Ceil(float64(duration) / float64(maxDurationPerEntry)))
-	subDuration := duration / time.Duration(n)
-	runes := []rune(seg.text)
-	charsPerPart := (len(runes) + n - 1) / n
-
-	var result []timedSegment
-	current := seg.start
-	for i := 0; i < n; i++ {
-		charStart := i * charsPerPart
-		charEnd := charStart + charsPerPart
-		if charEnd > len(runes) {
-			charEnd = len(runes)
-		}
-		partText := strings.TrimSpace(string(runes[charStart:charEnd]))
+		partText := string(runes[charPos : charPos+partChars])
+		partText = strings.TrimSpace(partText)
 		if partText == "" {
+			charPos += partChars
 			continue
 		}
-		partEnd := current + subDuration
-		if i == n-1 {
-			partEnd = seg.end
+
+		partEnd := current + durationPerPart
+		if i == numParts-1 {
+			partEnd = end
 		}
-		result = append(result, timedSegment{text: partText, start: current, end: partEnd})
+
+		result = append(result, timedSegment{
+			text:  partText,
+			start: current,
+			end:   partEnd,
+		})
+
+		charPos += partChars
 		current = partEnd
 	}
-	return result
+
+	blocks := make([]srtBlock, len(result))
+	for i, seg := range result {
+		blocks[i] = srtBlock{
+			Timeline: formatSRTTimeline(seg.start, seg.end),
+			Raw:      "0\n" + formatSRTTimeline(seg.start, seg.end) + "\n" + seg.text,
+		}
+	}
+	return blocks
 }
 
 func applySentenceBreaking(srtPath string) error {

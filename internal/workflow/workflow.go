@@ -29,10 +29,10 @@ type Options struct {
 	WhisperDevice          string
 	WhisperComputeType     string
 	SubtitleTargetLanguage string
+	SubtitleMode           subtitle.Mode
 	Translator             subtitle.Translator
 	YtDlpPath              string
 	BiliupPath             string
-	ShowProgress           bool
 }
 
 // Run executes the full workflow: download YouTube video, then upload to Bilibili.
@@ -44,7 +44,7 @@ func Run(opts Options) error {
 		return fmt.Errorf("dependency check failed: %w\nPlease install biliup-rs first", err)
 	}
 
-	fmt.Println("Fetching video metadata...")
+	fmt.Fprintln(os.Stderr, "Fetching video metadata...")
 	info, err := ytdlp.GetVideoInfo(opts.YouTubeURL, opts.YtDlpPath)
 	if err != nil {
 		return err
@@ -54,55 +54,59 @@ func Run(opts Options) error {
 		return fmt.Errorf("playlist URLs are not supported yet")
 	}
 
-	fmt.Printf("Video found: %s (by %s)\n", info.Title, info.Uploader)
+	fmt.Fprintf(os.Stderr, "Video found: %s (by %s)\n", info.Title, info.Uploader)
 
-	fmt.Println("Downloading video...")
+	fmt.Fprintln(os.Stderr, "Downloading video...")
 	downloadOpts := ytdlp.DownloadOptions{
 		OutputDir:     opts.OutputDir,
 		Quality:       opts.Quality,
 		CustomPath:    opts.YtDlpPath,
-		ShowProgress:  opts.ShowProgress,
 		ForceDownload: opts.ForceDownload,
 	}
 	result, err := ytdlp.DownloadVideo(opts.YouTubeURL, downloadOpts)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Downloaded to: %s\n", result.VideoPath)
+	fmt.Fprintf(os.Stderr, "Downloaded to: %s\n", result.VideoPath)
 
 	artifacts := []string{result.VideoPath, result.ThumbnailPath}
 	uploadVideoPath := result.VideoPath
 	if opts.GenerateSubtitles {
-		fmt.Println("Generating subtitles...")
-		subtitleResult, err := subtitle.EnsureSoftSubtitled(subtitle.Options{
+		fmt.Fprintln(os.Stderr, "Generating subtitles...")
+		subtitleOpts := subtitle.Options{
 			VideoPath:              result.VideoPath,
 			WhisperPath:            opts.WhisperPath,
 			ModelDirectory:         opts.WhisperModelDirectory,
 			WhisperDevice:          opts.WhisperDevice,
 			WhisperComputeType:     opts.WhisperComputeType,
 			SubtitleTargetLanguage: opts.SubtitleTargetLanguage,
+			SubtitleMode:           opts.SubtitleMode,
 			Translator:             opts.Translator,
-			ShowProgress:           opts.ShowProgress,
 			Force:                  opts.ForceSubtitles,
-		})
+		}
+		subtitleResult, err := subtitle.EnsureSubtitled(subtitleOpts)
 		if err != nil {
 			return err
 		}
 		uploadVideoPath = subtitleResult.SubtitledVideoPath
 		artifacts = append(artifacts, subtitleResult.SubtitlePath, subtitleResult.ChineseSubtitlePath, subtitleResult.SubtitledVideoPath)
-		fmt.Printf("Generated subtitle: %s\n", subtitleResult.SubtitlePath)
+		fmt.Fprintf(os.Stderr, "Generated subtitle: %s\n", subtitleResult.SubtitlePath)
 		if subtitleResult.ChineseSubtitlePath != "" {
-			fmt.Printf("Generated Chinese subtitle: %s\n", subtitleResult.ChineseSubtitlePath)
+			fmt.Fprintf(os.Stderr, "Generated Chinese subtitle: %s\n", subtitleResult.ChineseSubtitlePath)
 		}
-		fmt.Printf("Generated subtitled video: %s\n", subtitleResult.SubtitledVideoPath)
+		modeText := "burned"
+		if subtitleResult.SubtitleMode == subtitle.ModeSoft {
+			modeText = "soft"
+		}
+		fmt.Fprintf(os.Stderr, "Generated subtitled video (%s): %s\n", modeText, subtitleResult.SubtitledVideoPath)
 	}
 
 	cleanup := func() {
 		if !opts.Cleanup {
-			fmt.Println("Keeping generated files (default)")
+			fmt.Fprintln(os.Stderr, "Keeping generated files (default)")
 			return
 		}
-		fmt.Println("Cleaning up generated files...")
+		fmt.Fprintln(os.Stderr, "Cleaning up generated files...")
 		for _, artifact := range artifacts {
 			if artifact != "" {
 				_ = os.Remove(artifact)
@@ -122,7 +126,7 @@ func Run(opts Options) error {
 	bilibiliDesc := buildBilibiliDesc(info.Description, info.Uploader, info.WebpageURL)
 
 	coverPath := prepareCoverForUpload(result.ThumbnailPath)
-	fmt.Println("Uploading to Bilibili...")
+	fmt.Fprintln(os.Stderr, "Uploading to Bilibili...")
 	uploadOpts := biliup.UploadOptions{
 		VideoPath:      uploadVideoPath,
 		CoverPath:      coverPath,
@@ -134,22 +138,21 @@ func Run(opts Options) error {
 		Copyright:      2,
 		UserCookiePath: opts.BiliupCookie,
 		CustomPath:     opts.BiliupPath,
-		ShowProgress:   opts.ShowProgress,
 	}
 
 	err = biliup.Upload(uploadOpts)
 	if err != nil {
-		fmt.Printf("\nUpload failed! Downloaded files are kept at:\n")
-		fmt.Printf("  Video: %s\n", uploadVideoPath)
+		fmt.Fprintf(os.Stderr, "\nUpload failed! Downloaded files are kept at:\n")
+		fmt.Fprintf(os.Stderr, "  Video: %s\n", uploadVideoPath)
 		if result.ThumbnailPath != "" {
-			fmt.Printf("  Thumbnail: %s\n", result.ThumbnailPath)
+			fmt.Fprintf(os.Stderr, "  Thumbnail: %s\n", result.ThumbnailPath)
 		}
 		return err
 	}
 
 	cleanup()
 
-	fmt.Println("\nDone! Video uploaded successfully.")
+	fmt.Fprintln(os.Stderr, "\nDone! Video uploaded successfully.")
 	return nil
 }
 
@@ -161,7 +164,7 @@ func prepareCoverForUpload(coverPath string) string {
 	jpgPath := strings.TrimSuffix(coverPath, filepath.Ext(coverPath)) + ".jpg"
 	cmd := exec.Command("ffmpeg", "-y", "-i", coverPath, "-frames:v", "1", "-update", "1", jpgPath)
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("Warning: failed to convert webp cover to jpg, using original cover: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to convert webp cover to jpg, using original cover: %v\n", err)
 		return coverPath
 	}
 	return jpgPath

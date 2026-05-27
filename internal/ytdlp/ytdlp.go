@@ -65,7 +65,6 @@ type DownloadOptions struct {
 	OutputDir     string
 	Quality       string // "1080p", "720p", etc.
 	CustomPath    string
-	ShowProgress  bool
 	ForceDownload bool
 }
 
@@ -93,7 +92,7 @@ func DownloadVideo(url string, opts DownloadOptions) (*DownloadResult, error) {
 	}
 	if !opts.ForceDownload {
 		if result, ok := existingDownload(opts.OutputDir, info); ok {
-			fmt.Printf("Using existing downloaded video: %s\n", result.VideoPath)
+			fmt.Fprintf(os.Stderr, "Using existing downloaded video: %s\n", result.VideoPath)
 			return result, nil
 		}
 	}
@@ -124,13 +123,6 @@ func DownloadVideo(url string, opts DownloadOptions) (*DownloadResult, error) {
 	}
 
 	cmd := exec.Command(path, args...)
-
-	// Show progress if requested
-	if opts.ShowProgress {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-	}
-
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("yt-dlp download failed: %w", err)
 	}

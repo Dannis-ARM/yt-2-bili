@@ -3,7 +3,6 @@ package biliup
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"unicode/utf8"
@@ -34,7 +33,6 @@ type UploadOptions struct {
 	Copyright     int // 1 = original, 2 = reupload
 	UserCookiePath string
 	CustomPath    string
-	ShowProgress  bool
 }
 
 // Upload uploads a video to Bilibili using biliup.
@@ -80,11 +78,6 @@ func Upload(opts UploadOptions) error {
 	args = append(args, opts.VideoPath)
 
 	cmd := exec.Command(path, args...)
-
-	if opts.ShowProgress {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-	}
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("biliup upload failed: %w", err)

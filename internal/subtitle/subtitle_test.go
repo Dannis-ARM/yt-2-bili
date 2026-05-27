@@ -32,7 +32,15 @@ func TestSubtitleOutputPaths(t *testing.T) {
 
 func TestBuildWhisperArgsUsesOnlyExplicitOptions(t *testing.T) {
 	args := buildWhisperArgs(Options{VideoPath: `C:\tmp\abc123.mp4`})
-	expected := []string{`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`, "--batched", "True", "--vad_filter", "True", "--compute_type", "int8"}
+	expected := []string{
+		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
+		"--batched", "True", "--vad_filter", "True",
+		"--vad_min_silence_duration_ms", "400",
+		"--word_timestamps", "True",
+		"--max_line_width", "42",
+		"--max_line_count", "1",
+		"--compute_type", "int8",
+	}
 
 	if !reflect.DeepEqual(args, expected) {
 		t.Fatalf("unexpected args:\nwant: %#v\n got: %#v", expected, args)
@@ -49,6 +57,7 @@ func TestEnsureSoftSubtitledReusesValidatedChineseSubtitle(t *testing.T) {
 	result, err := prepareSubtitleFiles(context.Background(), Options{
 		VideoPath:              videoPath,
 		SubtitleTargetLanguage: "zh",
+		SubtitleMode:           ModeSoft,
 		Translator:             failingTranslator{},
 	})
 	if err != nil {
@@ -120,7 +129,12 @@ func TestBuildWhisperArgsAddsModelDirectory(t *testing.T) {
 	})
 	expected := []string{
 		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
-		"--batched", "True", "--vad_filter", "True", "--compute_type", "int8",
+		"--batched", "True", "--vad_filter", "True",
+		"--vad_min_silence_duration_ms", "400",
+		"--word_timestamps", "True",
+		"--max_line_width", "42",
+		"--max_line_count", "1",
+		"--compute_type", "int8",
 		"--model_directory", `E:\Models\faster-whisper-large-v3`,
 	}
 
@@ -137,7 +151,12 @@ func TestBuildWhisperArgsAddsDeviceAndComputeType(t *testing.T) {
 	})
 	expected := []string{
 		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
-		"--batched", "True", "--vad_filter", "True", "--compute_type", "float16",
+		"--batched", "True", "--vad_filter", "True",
+		"--vad_min_silence_duration_ms", "400",
+		"--word_timestamps", "True",
+		"--max_line_width", "42",
+		"--max_line_count", "1",
+		"--compute_type", "float16",
 		"--device", "cuda",
 	}
 
@@ -153,7 +172,7 @@ func TestTranslatorStreamsChineseSRT(t *testing.T) {
 	translator := NewLLMTranslator(LLMTranslatorOptions{
 		BaseURL: server.URL,
 		APIKey:  "test-key",
-		Model:   "doubao-seed-2-0-pro-260215",
+		Model:   "deepseek-v4-pro",
 	})
 
 	translated, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
@@ -172,7 +191,7 @@ func TestTranslatorRejectsChangedTimeline(t *testing.T) {
 	translator := NewLLMTranslator(LLMTranslatorOptions{
 		BaseURL: server.URL,
 		APIKey:  "test-key",
-		Model:   "doubao-seed-2-0-pro-260215",
+		Model:   "deepseek-v4-pro",
 	})
 
 	_, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
@@ -201,7 +220,7 @@ func TestTranslatorSplitsBatchesWithoutSplittingBlocks(t *testing.T) {
 	translator := NewLLMTranslator(LLMTranslatorOptions{
 		BaseURL:        server.URL,
 		APIKey:         "test-key",
-		Model:          "doubao-seed-2-0-pro-260215",
+		Model:          "deepseek-v4-pro",
 		BatchCharLimit: 60,
 	})
 
@@ -235,7 +254,7 @@ func TestTranslatorRetriesInvalidStructure(t *testing.T) {
 	translator := NewLLMTranslator(LLMTranslatorOptions{
 		BaseURL: server.URL,
 		APIKey:  "test-key",
-		Model:   "doubao-seed-2-0-pro-260215",
+		Model:   "deepseek-v4-pro",
 	})
 
 	translated, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
@@ -261,7 +280,7 @@ func TestTranslatorDoesNotRetryAuthenticationErrors(t *testing.T) {
 	translator := NewLLMTranslator(LLMTranslatorOptions{
 		BaseURL: server.URL,
 		APIKey:  "bad-key",
-		Model:   "doubao-seed-2-0-pro-260215",
+		Model:   "deepseek-v4-pro",
 	})
 
 	_, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n")

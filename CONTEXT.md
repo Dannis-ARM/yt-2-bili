@@ -41,13 +41,22 @@ A subtitle in the video's original spoken language. Produced before any translat
 A Chinese translation of a Source Subtitle. Used as the subtitle shown to Bilibili viewers.
 
 ## Soft Subtitle
-A subtitle track embedded in a video container without burning the text into the video image.
+A subtitle track embedded in a video container without burning the text into the video image. Can be turned on/off by the viewer. May be stripped by some platforms during upload.
 
-## Subtitled Video
+## Burned Subtitle / Hard Subtitle
+Subtitle text that is rendered directly into the video image. Cannot be turned off or stripped by video processing tools.
+
+## Soft Subtitled Video
 A video file that contains a Soft Subtitle track and can be used for upload instead of the original video file.
 
-## Chinese Subtitled Video
-A video file that contains a Chinese Subtitle as its Soft Subtitle track. Used for upload when Chinese subtitle translation is requested.
+## Burned Subtitled Video
+A video file with Burned Subtitle text rendered into the video frames. Used for upload when the target platform strips soft subtitle tracks.
+
+## Chinese Soft Subtitled Video
+A video file that contains a Chinese Subtitle as its Soft Subtitle track. Used for upload when Chinese subtitle translation is requested and the target platform supports soft subtitles.
+
+## Chinese Burned Subtitled Video
+A video file with Chinese Burned Subtitle text rendered into the video frames. Used for upload when Chinese subtitle translation is requested and the target platform strips soft subtitle tracks.
 
 ## Whisper
 A local speech-to-text tool used to generate subtitles from downloaded video audio.

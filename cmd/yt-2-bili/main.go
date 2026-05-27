@@ -24,6 +24,7 @@ var (
 	biliupPath    string
 
 	generateSubtitles      bool
+	subtitleModeStr        string
 	whisperPath            string
 	whisperModelDirectory  string
 	whisperDevice          string
@@ -141,13 +142,14 @@ func addCommonFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVar(&cleanup, "cleanup", false, "Clean up generated files after a successful transfer")
 	cmd.PersistentFlags().BoolVar(&forceDownload, "force-download", false, "Download again even if the expected video file already exists")
 	cmd.PersistentFlags().BoolVar(&forceSubtitles, "force-subtitles", false, "Force regenerate subtitles even if files already exist")
-	cmd.PersistentFlags().BoolVar(&generateSubtitles, "generate-subtitles", false, "Generate SRT subtitles and embed them as soft subtitles into an MP4")
+	cmd.PersistentFlags().BoolVar(&generateSubtitles, "generate-subtitles", false, "Generate SRT subtitles and embed into MP4 (burned by default)")
+	cmd.PersistentFlags().StringVar(&subtitleModeStr, "subtitle-mode", "", "Subtitle mode: burned/hard (default, burned into video) or soft (embedded track)")
 	cmd.PersistentFlags().StringVar(&whisperPath, "whisper-path", "", "Path to whisper executable (default: look in PATH)")
 	cmd.PersistentFlags().StringVar(&whisperModelDirectory, "whisper-model-directory", "", "Whisper model directory; passed as --model_directory to compatible CLIs")
 	cmd.PersistentFlags().StringVar(&whisperDevice, "whisper-device", "", "Whisper device (auto, cpu, cuda); passed as --device to compatible CLIs")
 	cmd.PersistentFlags().StringVar(&whisperComputeType, "whisper-compute-type", "", "Whisper compute type (int8, float16, float32); overrides default int8")
 	cmd.PersistentFlags().StringVar(&subtitleTargetLanguage, "subtitle-target-language", "", "Target language for subtitle translation (e.g. zh); requires --generate-subtitles")
-	cmd.PersistentFlags().StringVar(&llmModelName, "llm-model-name", "doubao-seed-2-0-pro-260215", "LLM model name for subtitle translation")
+	cmd.PersistentFlags().StringVar(&llmModelName, "llm-model-name", "deepseek-v4-flash", "LLM model name for subtitle translation")
 	cmd.PersistentFlags().StringVar(&ytDlpPath, "yt-dlp-path", "", "Path to yt-dlp executable (default: look in PATH)")
 	cmd.PersistentFlags().StringVar(&biliupPath, "biliup-path", "", "Path to biliup executable (default: look in PATH)")
 }
@@ -163,17 +165,22 @@ func resetFlags() {
 	ytDlpPath = ""
 	biliupPath = ""
 	generateSubtitles = false
+	subtitleModeStr = ""
 	whisperPath = ""
 	whisperModelDirectory = ""
 	whisperDevice = ""
 	whisperComputeType = ""
 	subtitleTargetLanguage = ""
-	llmModelName = "doubao-seed-2-0-pro-260215"
+	llmModelName = "deepseek-v4-flash"
 	uploadTitle = ""
 	uploadDesc = ""
 	uploadCover = ""
 	uploadSource = ""
 	uploadTags = ""
+}
+
+func parseSubtitleMode() (subtitle.Mode, error) {
+	return subtitle.ParseMode(subtitleModeStr)
 }
 
 func prepareDefaults() {
@@ -205,12 +212,21 @@ func validateFlags(isSubtitleCommand bool) error {
 		if subtitleTargetLanguage != "" {
 			return fmt.Errorf("--subtitle-target-language requires --generate-subtitles")
 		}
-		if llmModelName != "doubao-seed-2-0-pro-260215" {
+		if llmModelName != "deepseek-v4-pro" {
 			return fmt.Errorf("--llm-model-name requires --generate-subtitles")
+		}
+		if subtitleModeStr != "" {
+			return fmt.Errorf("--subtitle-mode requires --generate-subtitles")
 		}
 	}
 	if subtitleTargetLanguage != "" && !generateSubtitles && !isSubtitleCommand {
 		return fmt.Errorf("--subtitle-target-language requires --generate-subtitles")
+	}
+	// Validate subtitle mode if specified
+	if subtitleModeStr != "" {
+		if _, err := parseSubtitleMode(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -223,7 +239,7 @@ func runDownload(youtubeURL string) error {
 		return fmt.Errorf("dependency check failed: %w\nPlease install yt-dlp first", err)
 	}
 
-	fmt.Println("Fetching video metadata...")
+	fmt.Fprintln(os.Stderr, "Fetching video metadata...")
 	info, err := ytdlp.GetVideoInfo(youtubeURL, ytDlpPath)
 	if err != nil {
 		return err
@@ -232,30 +248,33 @@ func runDownload(youtubeURL string) error {
 		return fmt.Errorf("playlist URLs are not supported yet")
 	}
 
-	fmt.Printf("Video found: %s (by %s)\n", info.Title, info.Uploader)
-	fmt.Println("Downloading video...")
+	fmt.Fprintf(os.Stderr, "Video found: %s (by %s)\n", info.Title, info.Uploader)
+	fmt.Fprintln(os.Stderr, "Downloading video...")
 	result, err := ytdlp.DownloadVideo(youtubeURL, ytdlp.DownloadOptions{
 		OutputDir:     outputDir,
 		Quality:       quality,
 		CustomPath:    ytDlpPath,
-		ShowProgress:  true,
 		ForceDownload: forceDownload,
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Downloaded video: %s\n", result.VideoPath)
+	fmt.Fprintf(os.Stderr, "Downloaded video: %s\n", result.VideoPath)
 	if result.ThumbnailPath != "" {
-		fmt.Printf("Downloaded thumbnail: %s\n", result.ThumbnailPath)
+		fmt.Fprintf(os.Stderr, "Downloaded thumbnail: %s\n", result.ThumbnailPath)
 	}
 	if generateSubtitles {
 		subtitleResult, err := ensureSubtitles(result.VideoPath)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Generated subtitle: %s\n", subtitleResult.SubtitlePath)
-		fmt.Printf("Generated subtitled video: %s\n", subtitleResult.SubtitledVideoPath)
+		fmt.Fprintf(os.Stderr, "Generated subtitle: %s\n", subtitleResult.SubtitlePath)
+		modeText := "burned"
+		if subtitleResult.SubtitleMode == subtitle.ModeSoft {
+			modeText = "soft"
+		}
+		fmt.Fprintf(os.Stderr, "Generated subtitled video (%s): %s\n", modeText, subtitleResult.SubtitledVideoPath)
 	}
 	return nil
 }
@@ -270,7 +289,7 @@ func runUpload(videoPath string) error {
 			return err
 		}
 		videoPath = subtitleResult.SubtitledVideoPath
-		fmt.Printf("Using subtitled video: %s\n", videoPath)
+		fmt.Fprintf(os.Stderr, "Using subtitled video: %s\n", videoPath)
 	}
 
 	if uploadTitle == "" {
@@ -291,25 +310,28 @@ func runUpload(videoPath string) error {
 		Copyright:      2,
 		UserCookiePath: cookie,
 		CustomPath:     biliupPath,
-		ShowProgress:   true,
 	})
 }
 
 func ensureSubtitles(videoPath string) (*subtitle.Result, error) {
-	fmt.Println("Generating subtitles...")
+	fmt.Fprintln(os.Stderr, "Generating subtitles...")
 	translator, err := makeTranslator()
 	if err != nil {
 		return nil, err
 	}
-	return subtitle.EnsureSoftSubtitled(subtitle.Options{
+	mode, err := parseSubtitleMode()
+	if err != nil {
+		return nil, err
+	}
+	return subtitle.EnsureSubtitled(subtitle.Options{
 		VideoPath:              videoPath,
 		WhisperPath:            whisperPath,
 		ModelDirectory:         whisperModelDirectory,
 		WhisperDevice:          whisperDevice,
 		WhisperComputeType:     whisperComputeType,
 		SubtitleTargetLanguage: subtitleTargetLanguage,
+		SubtitleMode:           mode,
 		Translator:             translator,
-		ShowProgress:           true,
 		Force:                  forceSubtitles,
 	})
 }
@@ -318,12 +340,32 @@ func makeTranslator() (subtitle.Translator, error) {
 	if subtitleTargetLanguage == "" {
 		return nil, nil
 	}
+
+	// Anthropic-compatible provider (e.g. DeepSeek)
+	if token := os.Getenv("ANTHROPIC_AUTH_TOKEN"); token != "" {
+		baseURL := os.Getenv("ANTHROPIC_BASE_URL")
+		if baseURL == "" {
+			baseURL = "https://api.deepseek.com/anthropic"
+		}
+		return subtitle.NewLLMTranslator(subtitle.LLMTranslatorOptions{
+			BaseURL:  baseURL,
+			APIKey:   token,
+			Model:    llmModelName,
+			Provider: "anthropic",
+		}), nil
+	}
+
+	// OpenAI-compatible provider (default: Volcengine Ark)
 	apiKey := os.Getenv("ARK_API_KEY")
 	if apiKey == "" {
-		return nil, fmt.Errorf("ARK_API_KEY environment variable is required for subtitle translation")
+		return nil, fmt.Errorf("ARK_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable is required for subtitle translation")
+	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://ark.cn-beijing.volces.com/api/coding/v3"
 	}
 	return subtitle.NewLLMTranslator(subtitle.LLMTranslatorOptions{
-		BaseURL: "https://ark.cn-beijing.volces.com/api/coding/v3",
+		BaseURL: baseURL,
 		APIKey:  apiKey,
 		Model:   llmModelName,
 	}), nil
@@ -334,6 +376,10 @@ func runTransfer(youtubeURL string) error {
 		return err
 	}
 	translator, err := makeTranslator()
+	if err != nil {
+		return err
+	}
+	subtitleMode, err := parseSubtitleMode()
 	if err != nil {
 		return err
 	}
@@ -352,10 +398,10 @@ func runTransfer(youtubeURL string) error {
 		WhisperDevice:          whisperDevice,
 		WhisperComputeType:     whisperComputeType,
 		SubtitleTargetLanguage: subtitleTargetLanguage,
+		SubtitleMode:           subtitleMode,
 		Translator:             translator,
 		YtDlpPath:              ytDlpPath,
 		BiliupPath:             biliupPath,
-		ShowProgress:           true,
 	}
 
 	return workflow.Run(opts)
@@ -374,11 +420,15 @@ func runSubtitle(videoPath string) error {
 		return err
 	}
 
-	fmt.Printf("Generated subtitle: %s\n", subtitleResult.SubtitlePath)
+	fmt.Fprintf(os.Stderr, "Generated subtitle: %s\n", subtitleResult.SubtitlePath)
 	if subtitleResult.ChineseSubtitlePath != "" {
-		fmt.Printf("Generated Chinese subtitle: %s\n", subtitleResult.ChineseSubtitlePath)
+		fmt.Fprintf(os.Stderr, "Generated Chinese subtitle: %s\n", subtitleResult.ChineseSubtitlePath)
 	}
-	fmt.Printf("Generated subtitled video: %s\n", subtitleResult.SubtitledVideoPath)
+	modeText := "burned"
+	if subtitleResult.SubtitleMode == subtitle.ModeSoft {
+		modeText = "soft"
+	}
+	fmt.Fprintf(os.Stderr, "Generated subtitled video (%s): %s\n", modeText, subtitleResult.SubtitledVideoPath)
 	return nil
 }
 

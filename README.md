@@ -42,6 +42,16 @@ This creates a `cookies.json` file that `yt-2-bili` can use.
 go build -o yt-2-bili.exe ./cmd/yt-2-bili
 ```
 
+## Deploy
+
+On Windows, use the provided script to deploy to `$env:USERPROFILE\.local\bin`:
+
+```powershell
+.\deploy.ps1
+```
+
+Make sure `$env:USERPROFILE\.local\bin` is in your `PATH`.
+
 ## Commands
 
 ### Download from YouTube
@@ -87,8 +97,10 @@ This creates:
 ```text
 <video-id>.mp4
 <video-id>.srt
-<video-id>.subtitled.mp4
+<video-id>.burned.mp4  (burned-in subtitles by default)
 ```
+
+Use `--subtitle-mode=soft` to create `<video-id>.subtitled.mp4` with soft subtitles instead.
 
 ### Generate subtitles for local video
 
@@ -133,8 +145,10 @@ yt-2-bili subtitle `
 This creates:
 - `<video-id>.srt` - Source subtitles
 - `<video-id>.zh.srt` - Chinese subtitles (if translated)
-- `<video-id>.subtitled.mp4` - Video with soft subtitles
-- `<video-id>.zh.subtitled.mp4` - Video with Chinese soft subtitles (if translated)
+- `<video-id>.burned.mp4` - Video with burned-in subtitles (default)
+- `<video-id>.zh.burned.mp4` - Video with Chinese burned-in subtitles (if translated)
+
+Use `--subtitle-mode=soft` to create soft-subtitled videos (`.subtitled.mp4`) instead.
 
 #### Translate subtitles to Simplified Chinese
 
@@ -153,13 +167,13 @@ yt-2-bili transfer `
   <youtube-url>
 ```
 
-Optional: override the LLM model (default is `doubao-seed-2-0-pro-260215`).
+Optional: override the LLM model (default is `deepseek-v4-pro`).
 
 ```powershell
 yt-2-bili transfer `
   --generate-subtitles `
   --subtitle-target-language zh `
-  --llm-model-name "doubao-seed-2-0-pro-260215" `
+  --llm-model-name "deepseek-v4-pro" `
   <youtube-url>
 ```
 
@@ -169,8 +183,10 @@ This creates:
 <video-id>.mp4
 <video-id>.srt              # Source SRT, kept as intermediate artifact
 <video-id>.zh.srt            # Chinese SRT
-<video-id>.zh.subtitled.mp4  # Video with Chinese soft subtitle
+<video-id>.zh.burned.mp4     # Video with Chinese burned-in subtitle (default)
 ```
+
+Use `--subtitle-mode=soft` to create `<video-id>.zh.subtitled.mp4` with soft subtitles instead.
 
 ### Upload to Bilibili
 
@@ -230,13 +246,14 @@ yt-2-bili transfer `
 | `--cleanup` | Clean up generated files after a successful `transfer`; by default files are kept. |
 | `--force-download` | Download again even if the expected local video file already exists. |
 | `--force-subtitles` | Force regenerate subtitles even if files already exist. |
-| `--generate-subtitles` | Generate an SRT file and embed it as a soft subtitle into an MP4. |
+| `--generate-subtitles` | Generate an SRT file and burn it into the video (default) or embed as soft subtitles. |
+| `--subtitle-mode` | Subtitle mode: `burned`/`hard` (default, burned into video) or `soft` (embedded track). |
 | `--whisper-path` | Path to the Whisper-compatible executable if it is not in `PATH`. |
 | `--whisper-model-directory` | Local model directory for Whisper-compatible CLIs that support `--model_directory`. |
 | `--whisper-device` | Device for Whisper (e.g. `cpu`, `cuda`). Passed as `--device` if set. |
 | `--whisper-compute-type` | Compute type for Whisper (e.g. `int8`, `float16`, `float32`). Overrides default `int8`. |
 | `--subtitle-target-language` | Target language for subtitle translation (e.g. `zh`). Requires `--generate-subtitles`. |
-| `--llm-model-name` | LLM model for subtitle translation. Default: `doubao-seed-2-0-pro-260215`. |
+| `--llm-model-name` | LLM model for subtitle translation. Default: `deepseek-v4-pro`. |
 | `--yt-dlp-path` | Path to the `yt-dlp` executable if it is not in `PATH`. |
 | `--biliup-path` | Path to the `biliup` executable if it is not in `PATH`. |
 
