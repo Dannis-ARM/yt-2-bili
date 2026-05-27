@@ -45,7 +45,7 @@ func TestBreakSentencesSplitsLongCharEntry(t *testing.T) {
 		t.Fatalf("expected at least 2 blocks, got %d", len(blocks))
 	}
 	for _, b := range blocks {
-		text := strings.Join(extractTextLines(b.Raw), " ")
+		text := strings.Join(extractTextLines(b.Text), " ")
 		if charCount(text) > maxCharsPerEntry {
 			t.Fatalf("block exceeds char limit (%d): %s", charCount(text), text)
 		}

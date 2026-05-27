@@ -174,7 +174,7 @@ func TestBuildWhisperArgsAddsDeviceAndComputeType(t *testing.T) {
 }
 
 func TestTranslatorStreamsChineseSRT(t *testing.T) {
-	server := newStreamingTranslationServer(t, "1\n00:00:00,000 --> 00:00:01,000\n你好\n\n")
+	server := newStreamingTranslationServer(t, "[1] 你好\n")
 	defer server.Close()
 
 	translator := NewLLMTranslator(LLMTranslatorOptions{
@@ -192,8 +192,9 @@ func TestTranslatorStreamsChineseSRT(t *testing.T) {
 	}
 }
 
-func TestTranslatorRejectsChangedTimeline(t *testing.T) {
-	server := newStreamingTranslationServer(t, "1\n00:00:02,000 --> 00:00:03,000\n你好\n\n")
+func TestTranslatorRejectsWrongEntryCount(t *testing.T) {
+	// LLM returns fewer entries than expected
+	server := newStreamingTranslationServer(t, "[1] 你好\n")
 	defer server.Close()
 
 	translator := NewLLMTranslator(LLMTranslatorOptions{
@@ -202,19 +203,20 @@ func TestTranslatorRejectsChangedTimeline(t *testing.T) {
 		Model:   "deepseek-v4-pro",
 	})
 
-	_, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+	// Source has 2 blocks but LLM returns 1 entry
+	_, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n\n2\n00:00:01,000 --> 00:00:02,000\nWorld\n")
 	if err == nil {
-		t.Fatal("translation with changed timeline should fail")
+		t.Fatal("translation with wrong entry count should fail")
 	}
-	if !strings.Contains(err.Error(), "timeline") {
-		t.Fatalf("expected timeline validation error, got: %v", err)
+	if !strings.Contains(err.Error(), "expected 2 translated entries, got 1") {
+		t.Fatalf("expected entry count error, got: %v", err)
 	}
 }
 
 func TestTranslatorSplitsBatchesWithoutSplittingBlocks(t *testing.T) {
 	responses := []string{
-		"1\n00:00:00,000 --> 00:00:01,000\n你好\n\n",
-		"2\n00:00:01,000 --> 00:00:02,000\n世界\n\n",
+		"[1] 你好\n",
+		"[1] 世界\n",
 	}
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +231,7 @@ func TestTranslatorSplitsBatchesWithoutSplittingBlocks(t *testing.T) {
 		BaseURL:        server.URL,
 		APIKey:         "test-key",
 		Model:          "deepseek-v4-pro",
-		BatchCharLimit: 60,
+		BatchCharLimit: 5,
 	})
 
 	source := "1\n00:00:00,000 --> 00:00:01,000\nHello\n\n2\n00:00:01,000 --> 00:00:02,000\nWorld\n"

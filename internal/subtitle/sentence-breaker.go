@@ -40,14 +40,14 @@ func BreakSentences(srt string) (string, error) {
 
 	for i := range result {
 		result[i].Number = strconv.Itoa(i + 1)
-		result[i].Raw = buildBlockRaw(result[i].Number, result[i].Timeline, extractTextLines(result[i].Raw))
+		result[i].Text = cleanText(result[i].Text)
 	}
 
 	return joinSRTBlocks(result), nil
 }
 
 func splitBlockIfNeeded(block srtBlock, start, end time.Duration) []srtBlock {
-	text := strings.Join(extractTextLines(block.Raw), " ")
+	text := strings.Join(extractTextLines(block.Text), " ")
 	duration := end - start
 	chars := charCount(text)
 
@@ -120,7 +120,7 @@ func splitBlockEvenly(text string, start, end time.Duration, numParts int) []srt
 	for i, seg := range result {
 		blocks[i] = srtBlock{
 			Timeline: formatSRTTimeline(seg.start, seg.end),
-			Raw:      "0\n" + formatSRTTimeline(seg.start, seg.end) + "\n" + seg.text,
+			Text:     seg.text,
 		}
 	}
 	return blocks
@@ -195,30 +195,30 @@ func formatSRTTime(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, s, millis)
 }
 
-func extractTextLines(raw string) []string {
-	normalized := strings.ReplaceAll(strings.TrimSpace(raw), "\r\n", "\n")
-	lines := strings.Split(normalized, "\n")
-	if len(lines) < 3 {
-		return lines
-	}
-	var textLines []string
-	for _, line := range lines[2:] {
+func extractTextLines(text string) []string {
+	text = strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	var result []string
+	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			textLines = append(textLines, line)
+			result = append(result, line)
 		}
 	}
-	return textLines
+	if len(result) == 0 {
+		return []string{text}
+	}
+	return result
 }
 
-func buildBlockRaw(number, timeline string, lines []string) string {
-	return number + "\n" + timeline + "\n" + strings.Join(lines, "\n")
+func cleanText(text string) string {
+	return strings.Join(extractTextLines(text), "\n")
 }
 
 func joinSRTBlocks(blocks []srtBlock) string {
 	parts := make([]string, len(blocks))
 	for i, b := range blocks {
-		parts[i] = b.Raw
+		parts[i] = b.Number + "\n" + b.Timeline + "\n" + b.Text
 	}
 	return strings.Join(parts, "\n\n") + "\n"
 }

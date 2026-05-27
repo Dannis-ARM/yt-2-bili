@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -80,53 +81,50 @@ func NewLLMTranslator(opts LLMTranslatorOptions) *LLMTranslator {
 }
 
 func (t *LLMTranslator) TranslateSRT(ctx context.Context, srt string) (string, error) {
-	batches, err := splitSRTBatches(srt, t.batchCharLimit)
+	blocks, err := parseSRTBlocks(srt)
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(os.Stderr, "Translating in %d batch(es)...\n", len(batches))
-	translated := make([]string, 0, len(batches))
+
+	batches := batchSRTBlocks(blocks, t.batchCharLimit)
+	fmt.Fprintf(os.Stderr, "Translating %d block(s) in %d batch(es)...\n", len(blocks), len(batches))
+
+	texts := make([]string, 0, len(blocks))
 	for i, batch := range batches {
 		fmt.Fprintf(os.Stderr, "Translating batch %d/%d...\n", i+1, len(batches))
-		part, err := t.translateSRTBatch(ctx, batch, "SRT")
+		input := buildTextInput(batch)
+		output, err := t.translateWithPrompt(ctx, input, systemPromptSRT, "SRT")
 		if err != nil {
 			return "", err
 		}
-		translated = append(translated, strings.TrimSpace(part))
+		parsed, err := parseTextOutput(output, len(batch))
+		if err != nil {
+			return "", err
+		}
+		texts = append(texts, parsed...)
 	}
-	return strings.Join(translated, "\n\n") + "\n", nil
+
+	return reconstructSRT(blocks, texts), nil
 }
 
 func (t *LLMTranslator) TranslateText(ctx context.Context, text string) (string, error) {
 	label := "text:" + truncateForLabel(text, 30)
-	for attempt := 0; attempt < translationMaxAttempts; attempt++ {
-		translated, err := t.translateTextOnce(ctx, text, label)
-		if err == nil {
-			return translated, nil
-		}
-		var nonRetryable nonRetryableError
-		if errors.As(err, &nonRetryable) {
-			return "", err
-		}
-	}
-	return "", fmt.Errorf("translation failed after %d attempts", translationMaxAttempts)
+	return t.translateWithPrompt(ctx, text, systemPromptText, label)
 }
 
-func (t *LLMTranslator) translateTextOnce(ctx context.Context, text string, label string) (string, error) {
-	switch t.provider {
-	case "anthropic":
-		return t.translateTextAnthropic(ctx, text, label)
-	default:
-		return t.translateTextOpenAI(ctx, text, label)
-	}
-}
-
-func (t *LLMTranslator) translateSRTBatch(ctx context.Context, srt string, label string) (string, error) {
+func (t *LLMTranslator) translateWithPrompt(ctx context.Context, input string, systemPrompt string, label string) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt < translationMaxAttempts; attempt++ {
-		translated, err := t.translateSRTBatchOnce(ctx, srt, label)
+		var output string
+		var err error
+		switch t.provider {
+		case "anthropic":
+			output, err = t.translateAnthropic(ctx, input, systemPrompt, label)
+		default:
+			output, err = t.translateOpenAI(ctx, input, systemPrompt, label)
+		}
 		if err == nil {
-			return translated, nil
+			return output, nil
 		}
 		lastErr = err
 		var nonRetryable nonRetryableError
@@ -137,26 +135,8 @@ func (t *LLMTranslator) translateSRTBatch(ctx context.Context, srt string, label
 	return "", lastErr
 }
 
-func (t *LLMTranslator) translateSRTBatchOnce(ctx context.Context, srt string, label string) (string, error) {
-	switch t.provider {
-	case "anthropic":
-		return t.translateAnthropic(ctx, srt, label)
-	default:
-		return t.translateOpenAI(ctx, srt, label)
-	}
-}
-
 const (
-	systemPromptSRT = `You are an SRT translator. Translate the subtitle text in each SRT block to Simplified Chinese.
-
-CRITICAL RULES — VIOLATION WILL CAUSE PARSING FAILURE:
-1. Output ONLY the translated SRT. No greetings, explanations, or markdown fences.
-2. Keep every block number and timeline EXACTLY unchanged — copy them verbatim.
-3. Keep exactly the same number of blocks. Each block: number line, timeline line, one or more text lines.
-4. Separate blocks with exactly ONE blank line. Do NOT merge or split blocks.
-5. Translate only the text lines inside each block. Preserve line breaks within text.
-6. No trailing commentary, no leading text before the first block number.
-7. Be CONCISE: keep translated text roughly the same length as the original. Do NOT add words.`
+	systemPromptSRT = `Translate each numbered entry to Simplified Chinese. Keep the [N] markers exactly unchanged and in the same order. Translate only the text after each marker. Output ONLY the translated entries with markers. No greetings, explanations, or markdown fences. Be concise.`
 
 	systemPromptText = `You are a translator. Translate the given text to Simplified Chinese.
 
@@ -168,13 +148,13 @@ CRITICAL RULES:
 
 // ---- OpenAI-compatible API ----
 
-func (t *LLMTranslator) translateOpenAI(ctx context.Context, srt string, label string) (string, error) {
+func (t *LLMTranslator) translateOpenAI(ctx context.Context, input string, systemPrompt string, label string) (string, error) {
 	body := openAIChatRequest{
 		Model:  t.model,
 		Stream: true,
 		Messages: []openAIMessage{
-			{Role: "system", Content: systemPromptSRT},
-			{Role: "user", Content: srt},
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: input},
 		},
 	}
 	payload, err := json.Marshal(body)
@@ -205,58 +185,7 @@ func (t *LLMTranslator) translateOpenAI(ctx context.Context, srt string, label s
 		return "", err
 	}
 
-	translated, err := readOpenAIStream(resp.Body, label)
-	if err != nil {
-		return "", err
-	}
-	if err := validateTranslatedSRT(srt, translated); err != nil {
-		return "", nonRetryableError{err: err}
-	}
-	return translated, nil
-}
-
-func (t *LLMTranslator) translateTextOpenAI(ctx context.Context, text string, label string) (string, error) {
-	body := openAIChatRequest{
-		Model:  t.model,
-		Stream: true,
-		Messages: []openAIMessage{
-			{Role: "system", Content: systemPromptText},
-			{Role: "user", Content: text},
-		},
-	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	fmt.Fprintf(os.Stderr, "POST [%s] %s... ", label, t.baseURL+"/chat/completions")
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		err := fmt.Errorf("llm translation failed: %s: %s", resp.Status, strings.TrimSpace(string(data)))
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-			return "", nonRetryableError{err: err}
-		}
-		return "", err
-	}
-
-	translated, err := readOpenAIStream(resp.Body, label)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(translated), nil
+	return readOpenAIStream(resp.Body, label)
 }
 
 type openAIChatRequest struct {
@@ -319,14 +248,14 @@ func readOpenAIStream(r io.Reader, label string) (string, error) {
 
 // ---- Anthropic Messages API ----
 
-func (t *LLMTranslator) translateAnthropic(ctx context.Context, srt string, label string) (string, error) {
+func (t *LLMTranslator) translateAnthropic(ctx context.Context, input string, systemPrompt string, label string) (string, error) {
 	body := anthropicRequest{
-		Model:      t.model,
-		MaxTokens:  100000,
-		Thinking:   &anthropicThinking{Type: "disabled"},
-		System:   systemPromptSRT,
+		Model:     t.model,
+		MaxTokens: 100000,
+		Thinking:  &anthropicThinking{Type: "disabled"},
+		System:    systemPrompt,
 		Messages: []anthropicMessage{
-			{Role: "user", Content: srt},
+			{Role: "user", Content: input},
 		},
 		Stream: true,
 	}
@@ -359,70 +288,16 @@ func (t *LLMTranslator) translateAnthropic(ctx context.Context, srt string, labe
 		return "", err
 	}
 
-	translated, err := readAnthropicStream(resp.Body, label)
-	if err != nil {
-		return "", err
-	}
-	if err := validateTranslatedSRT(srt, translated); err != nil {
-		return "", nonRetryableError{err: err}
-	}
-	return translated, nil
-}
-
-func (t *LLMTranslator) translateTextAnthropic(ctx context.Context, text string, label string) (string, error) {
-	body := anthropicRequest{
-		Model:      t.model,
-		MaxTokens:  32000,
-		Thinking:   &anthropicThinking{Type: "disabled"},
-		System:   systemPromptText,
-		Messages: []anthropicMessage{
-			{Role: "user", Content: text},
-		},
-		Stream: true,
-	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/v1/messages", bytes.NewReader(payload))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("x-api-key", t.apiKey)
-	req.Header.Set("anthropic-version", anthropicVersion)
-	req.Header.Set("Content-Type", "application/json")
-
-	fmt.Fprintf(os.Stderr, "POST [%s] %s... ", label, t.baseURL+"/v1/messages")
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		err := fmt.Errorf("llm translation failed: %s: %s", resp.Status, strings.TrimSpace(string(data)))
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-			return "", nonRetryableError{err: err}
-		}
-		return "", err
-	}
-
-	translated, err := readAnthropicStream(resp.Body, label)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(translated), nil
+	return readAnthropicStream(resp.Body, label)
 }
 
 type anthropicRequest struct {
-	Model      string             `json:"model"`
-	MaxTokens  int                `json:"max_tokens"`
-	System     string             `json:"system"`
-	Messages   []anthropicMessage `json:"messages"`
-	Stream     bool               `json:"stream"`
-	Thinking   *anthropicThinking `json:"thinking,omitempty"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    string             `json:"system"`
+	Messages  []anthropicMessage `json:"messages"`
+	Stream    bool               `json:"stream"`
+	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicThinking struct {
@@ -484,12 +359,82 @@ func readAnthropicStream(r io.Reader, label string) (string, error) {
 	return translated.String(), nil
 }
 
+// ---- SRT text-only helpers ----
+
+func batchSRTBlocks(blocks []srtBlock, limit int) [][]srtBlock {
+	var batches [][]srtBlock
+	var current []srtBlock
+	currentLen := 0
+	for _, block := range blocks {
+		if len(block.Text) > limit {
+			// Single block exceeds limit — still process it alone
+			batches = append(batches, []srtBlock{block})
+			continue
+		}
+		sep := 0
+		if len(current) > 0 {
+			sep = 1 // newline between entries
+		}
+		if len(current) > 0 && currentLen+sep+len(block.Text) > limit {
+			batches = append(batches, current)
+			current = nil
+			currentLen = 0
+			sep = 0
+		}
+		current = append(current, block)
+		currentLen += sep + len(block.Text)
+	}
+	if len(current) > 0 {
+		batches = append(batches, current)
+	}
+	return batches
+}
+
+func buildTextInput(blocks []srtBlock) string {
+	var b strings.Builder
+	for i, block := range blocks {
+		fmt.Fprintf(&b, "[%d] %s\n", i+1, block.Text)
+	}
+	return b.String()
+}
+
+var textMarkerRe = regexp.MustCompile(`(?m)^\[(\d+)\]\s*`)
+
+func parseTextOutput(output string, expectedCount int) ([]string, error) {
+	matches := textMarkerRe.FindAllStringSubmatchIndex(output, -1)
+	if len(matches) != expectedCount {
+		return nil, fmt.Errorf("expected %d translated entries, got %d", expectedCount, len(matches))
+	}
+	texts := make([]string, 0, len(matches))
+	for i, m := range matches {
+		textStart := m[1]
+		textEnd := len(output)
+		if i+1 < len(matches) {
+			textEnd = matches[i+1][0]
+		}
+		texts = append(texts, strings.TrimSpace(output[textStart:textEnd]))
+	}
+	return texts, nil
+}
+
+func reconstructSRT(blocks []srtBlock, texts []string) string {
+	var out strings.Builder
+	for i, block := range blocks {
+		if i > 0 {
+			out.WriteString("\n\n")
+		}
+		fmt.Fprintf(&out, "%s\n%s\n%s", block.Number, block.Timeline, texts[i])
+	}
+	out.WriteString("\n")
+	return out.String()
+}
+
 // ---- Shared ----
 
 type srtBlock struct {
 	Number   string
 	Timeline string
-	Raw      string
+	Text     string // text lines only (everything after timeline)
 }
 
 func validateTranslatedSRT(source, translated string) error {
@@ -502,13 +447,11 @@ func validateTranslatedSRT(source, translated string) error {
 		return fmt.Errorf("translated subtitle is invalid: %w", err)
 	}
 
-	// Build set of valid source timelines
 	sourceTimelines := make(map[string]bool, len(sourceBlocks))
 	for _, b := range sourceBlocks {
 		sourceTimelines[b.Timeline] = true
 	}
 
-	// Only validate timeline integrity — block count and numbering are allowed to differ
 	for _, b := range translatedBlocks {
 		if !sourceTimelines[b.Timeline] {
 			return fmt.Errorf("translated timeline %q not found in source", b.Timeline)
@@ -532,44 +475,15 @@ func parseSRTBlocks(srt string) ([]srtBlock, error) {
 			continue
 		}
 		lines := strings.Split(raw, "\n")
-		if len(lines) < 2 {
+		if len(lines) < 3 {
 			continue
 		}
 		number := strings.TrimSpace(lines[0])
 		timeline := strings.TrimSpace(lines[1])
-		blocks = append(blocks, srtBlock{Number: number, Timeline: timeline, Raw: raw})
+		text := strings.Join(lines[2:], "\n")
+		blocks = append(blocks, srtBlock{Number: number, Timeline: timeline, Text: text})
 	}
 	return blocks, nil
-}
-
-func splitSRTBatches(srt string, limit int) ([]string, error) {
-	blocks, err := parseSRTBlocks(srt)
-	if err != nil {
-		return nil, err
-	}
-	var batches []string
-	var current strings.Builder
-	for _, block := range blocks {
-		blockText := block.Raw
-		if len(blockText) > limit {
-			return nil, fmt.Errorf("subtitle block %s exceeds translation batch size", block.Number)
-		}
-		separator := ""
-		if current.Len() > 0 {
-			separator = "\n\n"
-		}
-		if current.Len() > 0 && current.Len()+len(separator)+len(blockText) > limit {
-			batches = append(batches, current.String())
-			current.Reset()
-			separator = ""
-		}
-		current.WriteString(separator)
-		current.WriteString(blockText)
-	}
-	if current.Len() > 0 {
-		batches = append(batches, current.String())
-	}
-	return batches, nil
 }
 
 func truncateForLabel(s string, maxLen int) string {
