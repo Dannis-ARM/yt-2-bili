@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	ffmpeg_go "github.com/u2takey/ffmpeg-go"
 )
 
 // Mode represents the subtitle embedding mode.
@@ -368,66 +370,45 @@ func buildWhisperArgs(opts Options) []string {
 }
 
 func embedSoftSubtitle(videoPath, srtPath, outputPath string) error {
-	// Get directory and filenames
-	videoDir := filepath.Dir(videoPath)
-	videoFilename := filepath.Base(videoPath)
-	srtFilename := filepath.Base(srtPath)
-	outputFilename := filepath.Base(outputPath)
+	videoStream := ffmpeg_go.Input(videoPath)
+	subtitleStream := ffmpeg_go.Input(srtPath)
 
-	args := []string{
-		"-y",
-		"-i", videoFilename,
-		"-i", srtFilename,
-		"-c:v", "copy",
-		"-c:a", "copy",
-		"-c:s", "mov_text",
-		outputFilename,
-	}
-	cmd := exec.Command("ffmpeg", args...)
-	cmd.Dir = videoDir // Run in video directory
-
-	// Capture stderr for better error reporting
 	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	err := ffmpeg_go.Output([]*ffmpeg_go.Stream{videoStream, subtitleStream}, outputPath,
+		ffmpeg_go.KwArgs{
+			"c:v": "copy",
+			"c:a": "copy",
+			"c:s": "mov_text",
+		}).
+		OverWriteOutput().
+		WithErrorOutput(&stderr).
+		Run()
 
-	if err := cmd.Run(); err != nil {
+	if err != nil {
 		return fmt.Errorf("ffmpeg soft subtitle embedding failed: %w\nstderr: %s", err, stderr.String())
 	}
 	return nil
 }
 
 func burnSubtitle(videoPath, srtPath, outputPath string) error {
-	// Get directory and filenames
-	videoDir := filepath.Dir(videoPath)
-	videoFilename := filepath.Base(videoPath)
-	srtFilename := filepath.Base(srtPath)
-	outputFilename := filepath.Base(outputPath)
-
-	// Build subtitles filter with font styling (using relative path)
-	filterStr := fmt.Sprintf("subtitles=%s:force_style='FontName=%s,FontSize=18,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=10'",
-		srtFilename,
-		getFontName(),
-	)
-
-	args := []string{
-		"-y",
-		"-i", videoFilename,
-		"-vf", filterStr,
-		"-c:a", "copy",
-		// Use reasonable encoding settings - H.264 with CRF 23 (good quality/size tradeoff)
-		"-c:v", "libx264",
-		"-crf", "23",
-		"-preset", "medium",
-		outputFilename,
-	}
-	cmd := exec.Command("ffmpeg", args...)
-	cmd.Dir = videoDir // Run in video directory to use relative paths
-
-	// Capture stderr for better error reporting
 	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	err := ffmpeg_go.Input(videoPath).
+		Filter("subtitles", ffmpeg_go.Args{escapeFFmpegPath(srtPath)},
+			ffmpeg_go.KwArgs{
+				"force_style": fmt.Sprintf("FontName=%s,FontSize=18,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=10",
+					getFontName()),
+			}).
+		Output(outputPath, ffmpeg_go.KwArgs{
+			"c:a":    "copy",
+			"c:v":    "libx264",
+			"crf":    "23",
+			"preset": "medium",
+		}).
+		OverWriteOutput().
+		WithErrorOutput(&stderr).
+		Run()
 
-	if err := cmd.Run(); err != nil {
+	if err != nil {
 		return fmt.Errorf("ffmpeg subtitle burning failed: %w\nstderr: %s", err, stderr.String())
 	}
 	return nil
