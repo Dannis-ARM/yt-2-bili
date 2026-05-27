@@ -2,6 +2,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,7 +73,10 @@ func Run(opts Options) error {
 
 	artifacts := []string{result.VideoPath, result.ThumbnailPath}
 	uploadVideoPath := result.VideoPath
-	if opts.GenerateSubtitles {
+	uploadTitle := info.Title
+	uploadDesc := info.Description
+
+	if opts.GenerateSubtitles && opts.Translator != nil && opts.SubtitleTargetLanguage != "" {
 		fmt.Fprintln(os.Stderr, "Generating subtitles...")
 		subtitleOpts := subtitle.Options{
 			VideoPath:              result.VideoPath,
@@ -100,6 +104,42 @@ func Run(opts Options) error {
 			modeText = "soft"
 		}
 		fmt.Fprintf(os.Stderr, "Generated subtitled video (%s): %s\n", modeText, subtitleResult.SubtitledVideoPath)
+
+		// Translate title and description in parallel
+		ctx := context.Background()
+		fmt.Fprintln(os.Stderr, "Translating title and description...")
+
+		type translateResult struct {
+			text string
+			err  error
+		}
+		titleChan := make(chan translateResult, 1)
+		descChan := make(chan translateResult, 1)
+
+		go func() {
+			text, err := opts.Translator.TranslateText(ctx, info.Title)
+			titleChan <- translateResult{text: text, err: err}
+		}()
+		go func() {
+			text, err := opts.Translator.TranslateText(ctx, info.Description)
+			descChan <- translateResult{text: text, err: err}
+		}()
+
+		titleResult := <-titleChan
+		if titleResult.err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to translate title, using original: %v\n", titleResult.err)
+		} else {
+			uploadTitle = fmt.Sprintf("[中字] %s | %s", titleResult.text, info.Title)
+			fmt.Fprintf(os.Stderr, "Translated title: %s\n", uploadTitle)
+		}
+
+		descResult := <-descChan
+		if descResult.err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to translate description, using original: %v\n", descResult.err)
+		} else {
+			uploadDesc = descResult.text
+			fmt.Fprintf(os.Stderr, "Description translated successfully\n")
+		}
 	}
 
 	cleanup := func() {
@@ -124,14 +164,14 @@ func Run(opts Options) error {
 		}
 	}
 
-	bilibiliDesc := buildBilibiliDesc(info.Description, info.Uploader, info.WebpageURL)
+	bilibiliDesc := buildBilibiliDesc(uploadDesc, info.Uploader, info.WebpageURL)
 
 	coverPath := prepareCoverForUpload(result.ThumbnailPath)
 	fmt.Fprintln(os.Stderr, "Uploading to Bilibili...")
 	uploadOpts := biliup.UploadOptions{
 		VideoPath:      uploadVideoPath,
 		CoverPath:      coverPath,
-		Title:          info.Title,
+		Title:          uploadTitle,
 		Desc:           bilibiliDesc,
 		Source:         info.WebpageURL,
 		Tags:           info.Tags,

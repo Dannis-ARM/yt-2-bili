@@ -230,6 +230,7 @@ Use `whisper-ctranslate2` with a local faster-whisper model directory during tra
 yt-2-bili transfer `
   --cookie $env:USERPROFILE\cookies.json `
   --generate-subtitles `
+  --subtitle-target-language zh `
   --whisper-path whisper-ctranslate2 `
   --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
   <youtube-url>

@@ -16,8 +16,8 @@ import (
 
 const (
 	defaultTranslationBatchCharLimit = 120000
-	translationMaxAttempts          = 2
-	translationRequestTimeout       = 60 * time.Second
+	translationMaxAttempts          = 1
+	translationRequestTimeout       = 600 * time.Second
 	anthropicVersion                = "2023-06-01"
 )
 
@@ -32,6 +32,7 @@ type LLMTranslatorOptions struct {
 
 type Translator interface {
 	TranslateSRT(ctx context.Context, srt string) (string, error)
+	TranslateText(ctx context.Context, text string) (string, error)
 }
 
 type LLMTranslator struct {
@@ -87,7 +88,7 @@ func (t *LLMTranslator) TranslateSRT(ctx context.Context, srt string) (string, e
 	translated := make([]string, 0, len(batches))
 	for i, batch := range batches {
 		fmt.Fprintf(os.Stderr, "Translating batch %d/%d...\n", i+1, len(batches))
-		part, err := t.translateSRTBatch(ctx, batch)
+		part, err := t.translateSRTBatch(ctx, batch, "SRT")
 		if err != nil {
 			return "", err
 		}
@@ -96,10 +97,34 @@ func (t *LLMTranslator) TranslateSRT(ctx context.Context, srt string) (string, e
 	return strings.Join(translated, "\n\n") + "\n", nil
 }
 
-func (t *LLMTranslator) translateSRTBatch(ctx context.Context, srt string) (string, error) {
+func (t *LLMTranslator) TranslateText(ctx context.Context, text string) (string, error) {
+	label := "text:" + truncateForLabel(text, 30)
+	for attempt := 0; attempt < translationMaxAttempts; attempt++ {
+		translated, err := t.translateTextOnce(ctx, text, label)
+		if err == nil {
+			return translated, nil
+		}
+		var nonRetryable nonRetryableError
+		if errors.As(err, &nonRetryable) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("translation failed after %d attempts", translationMaxAttempts)
+}
+
+func (t *LLMTranslator) translateTextOnce(ctx context.Context, text string, label string) (string, error) {
+	switch t.provider {
+	case "anthropic":
+		return t.translateTextAnthropic(ctx, text, label)
+	default:
+		return t.translateTextOpenAI(ctx, text, label)
+	}
+}
+
+func (t *LLMTranslator) translateSRTBatch(ctx context.Context, srt string, label string) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt < translationMaxAttempts; attempt++ {
-		translated, err := t.translateSRTBatchOnce(ctx, srt)
+		translated, err := t.translateSRTBatchOnce(ctx, srt, label)
 		if err == nil {
 			return translated, nil
 		}
@@ -112,23 +137,17 @@ func (t *LLMTranslator) translateSRTBatch(ctx context.Context, srt string) (stri
 	return "", lastErr
 }
 
-func (t *LLMTranslator) translateSRTBatchOnce(ctx context.Context, srt string) (string, error) {
+func (t *LLMTranslator) translateSRTBatchOnce(ctx context.Context, srt string, label string) (string, error) {
 	switch t.provider {
 	case "anthropic":
-		return t.translateAnthropic(ctx, srt)
+		return t.translateAnthropic(ctx, srt, label)
 	default:
-		return t.translateOpenAI(ctx, srt)
+		return t.translateOpenAI(ctx, srt, label)
 	}
 }
 
-// ---- OpenAI-compatible API ----
-
-func (t *LLMTranslator) translateOpenAI(ctx context.Context, srt string) (string, error) {
-	body := openAIChatRequest{
-		Model:  t.model,
-		Stream: true,
-		Messages: []openAIMessage{
-			{Role: "system", Content: `You are an SRT translator. Translate the subtitle text in each SRT block to Simplified Chinese.
+const (
+	systemPromptSRT = `You are an SRT translator. Translate the subtitle text in each SRT block to Simplified Chinese.
 
 CRITICAL RULES — VIOLATION WILL CAUSE PARSING FAILURE:
 1. Output ONLY the translated SRT. No greetings, explanations, or markdown fences.
@@ -137,7 +156,24 @@ CRITICAL RULES — VIOLATION WILL CAUSE PARSING FAILURE:
 4. Separate blocks with exactly ONE blank line. Do NOT merge or split blocks.
 5. Translate only the text lines inside each block. Preserve line breaks within text.
 6. No trailing commentary, no leading text before the first block number.
-7. Be CONCISE: keep translated text roughly the same length as the original. Do NOT add words.`},
+7. Be CONCISE: keep translated text roughly the same length as the original. Do NOT add words.`
+
+	systemPromptText = `You are a translator. Translate the given text to Simplified Chinese.
+
+CRITICAL RULES:
+1. Output ONLY the translated text. No greetings, explanations, or markdown fences.
+2. Preserve the original formatting (line breaks, etc.).
+3. Be natural and fluent in Chinese.`
+)
+
+// ---- OpenAI-compatible API ----
+
+func (t *LLMTranslator) translateOpenAI(ctx context.Context, srt string, label string) (string, error) {
+	body := openAIChatRequest{
+		Model:  t.model,
+		Stream: true,
+		Messages: []openAIMessage{
+			{Role: "system", Content: systemPromptSRT},
 			{Role: "user", Content: srt},
 		},
 	}
@@ -153,7 +189,7 @@ CRITICAL RULES — VIOLATION WILL CAUSE PARSING FAILURE:
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	fmt.Fprintf(os.Stderr, "POST %s (model=%s)... ", t.baseURL+"/chat/completions", t.model)
+	fmt.Fprintf(os.Stderr, "POST [%s] %s... ", label, t.baseURL+"/chat/completions")
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return "", err
@@ -169,14 +205,58 @@ CRITICAL RULES — VIOLATION WILL CAUSE PARSING FAILURE:
 		return "", err
 	}
 
-	translated, err := readOpenAIStream(resp.Body)
+	translated, err := readOpenAIStream(resp.Body, label)
 	if err != nil {
 		return "", err
 	}
 	if err := validateTranslatedSRT(srt, translated); err != nil {
-		return "", err
+		return "", nonRetryableError{err: err}
 	}
 	return translated, nil
+}
+
+func (t *LLMTranslator) translateTextOpenAI(ctx context.Context, text string, label string) (string, error) {
+	body := openAIChatRequest{
+		Model:  t.model,
+		Stream: true,
+		Messages: []openAIMessage{
+			{Role: "system", Content: systemPromptText},
+			{Role: "user", Content: text},
+		},
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/chat/completions", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	fmt.Fprintf(os.Stderr, "POST [%s] %s... ", label, t.baseURL+"/chat/completions")
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		err := fmt.Errorf("llm translation failed: %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return "", nonRetryableError{err: err}
+		}
+		return "", err
+	}
+
+	translated, err := readOpenAIStream(resp.Body, label)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(translated), nil
 }
 
 type openAIChatRequest struct {
@@ -198,10 +278,11 @@ type openAIStreamChunk struct {
 	} `json:"choices"`
 }
 
-func readOpenAIStream(r io.Reader) (string, error) {
+func readOpenAIStream(r io.Reader, label string) (string, error) {
 	scanner := bufio.NewScanner(r)
 	var translated strings.Builder
 	chunks := 0
+	lastProgress := 0
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -209,7 +290,7 @@ func readOpenAIStream(r io.Reader) (string, error) {
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
-			fmt.Fprintf(os.Stderr, " (%d chunks)", chunks)
+			fmt.Fprintf(os.Stderr, " done (%d chars, %d chunks)", translated.Len(), chunks)
 			return translated.String(), nil
 		}
 		var chunk openAIStreamChunk
@@ -220,33 +301,30 @@ func readOpenAIStream(r io.Reader) (string, error) {
 			translated.WriteString(choice.Delta.Content)
 		}
 		chunks++
-		if chunks%10 == 0 {
-			fmt.Fprint(os.Stderr, ".")
+		if current := translated.Len(); current-lastProgress >= 1000 {
+			fmt.Fprintf(os.Stderr, " (%d chars)", current)
+			lastProgress = current
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", err
+		if translated.Len() > 0 {
+			fmt.Fprintf(os.Stderr, " (%d chars, PARTIAL)", translated.Len())
+			dumpTranslation(translated.String())
+		}
+		return "", fmt.Errorf("[%s] %w", label, err)
 	}
+	fmt.Fprintf(os.Stderr, " done (%d chars, %d chunks)", translated.Len(), chunks)
 	return translated.String(), nil
 }
 
 // ---- Anthropic Messages API ----
 
-func (t *LLMTranslator) translateAnthropic(ctx context.Context, srt string) (string, error) {
+func (t *LLMTranslator) translateAnthropic(ctx context.Context, srt string, label string) (string, error) {
 	body := anthropicRequest{
 		Model:      t.model,
-		MaxTokens:  20000,
+		MaxTokens:  100000,
 		Thinking:   &anthropicThinking{Type: "disabled"},
-		System:     `You are an SRT translator. Translate the subtitle text in each SRT block to Simplified Chinese.
-
-CRITICAL RULES — VIOLATION WILL CAUSE PARSING FAILURE:
-1. Output ONLY the translated SRT. No greetings, explanations, or markdown fences.
-2. Keep every block number and timeline EXACTLY unchanged — copy them verbatim.
-3. Keep exactly the same number of blocks. Each block: number line, timeline line, one or more text lines.
-4. Separate blocks with exactly ONE blank line. Do NOT merge or split blocks.
-5. Translate only the text lines inside each block. Preserve line breaks within text.
-6. No trailing commentary, no leading text before the first block number.
-7. Be CONCISE: keep translated text roughly the same length as the original. Do NOT add words.`,
+		System:   systemPromptSRT,
 		Messages: []anthropicMessage{
 			{Role: "user", Content: srt},
 		},
@@ -265,7 +343,7 @@ CRITICAL RULES — VIOLATION WILL CAUSE PARSING FAILURE:
 	req.Header.Set("anthropic-version", anthropicVersion)
 	req.Header.Set("Content-Type", "application/json")
 
-	fmt.Fprintf(os.Stderr, "POST %s (model=%s)... ", t.baseURL+"/v1/messages", t.model)
+	fmt.Fprintf(os.Stderr, "POST [%s] %s... ", label, t.baseURL+"/v1/messages")
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return "", err
@@ -281,15 +359,61 @@ CRITICAL RULES — VIOLATION WILL CAUSE PARSING FAILURE:
 		return "", err
 	}
 
-	translated, err := readAnthropicStream(resp.Body)
+	translated, err := readAnthropicStream(resp.Body, label)
 	if err != nil {
 		return "", err
 	}
-	dumpTranslation(translated)
 	if err := validateTranslatedSRT(srt, translated); err != nil {
-		return "", err
+		return "", nonRetryableError{err: err}
 	}
 	return translated, nil
+}
+
+func (t *LLMTranslator) translateTextAnthropic(ctx context.Context, text string, label string) (string, error) {
+	body := anthropicRequest{
+		Model:      t.model,
+		MaxTokens:  32000,
+		Thinking:   &anthropicThinking{Type: "disabled"},
+		System:   systemPromptText,
+		Messages: []anthropicMessage{
+			{Role: "user", Content: text},
+		},
+		Stream: true,
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/v1/messages", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("x-api-key", t.apiKey)
+	req.Header.Set("anthropic-version", anthropicVersion)
+	req.Header.Set("Content-Type", "application/json")
+
+	fmt.Fprintf(os.Stderr, "POST [%s] %s... ", label, t.baseURL+"/v1/messages")
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		err := fmt.Errorf("llm translation failed: %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return "", nonRetryableError{err: err}
+		}
+		return "", err
+	}
+
+	translated, err := readAnthropicStream(resp.Body, label)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(translated), nil
 }
 
 type anthropicRequest struct {
@@ -318,10 +442,11 @@ type anthropicSSEEvent struct {
 	} `json:"delta"`
 }
 
-func readAnthropicStream(r io.Reader) (string, error) {
+func readAnthropicStream(r io.Reader, label string) (string, error) {
 	scanner := bufio.NewScanner(r)
 	var translated strings.Builder
 	chunks := 0
+	lastProgress := 0
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -332,21 +457,30 @@ func readAnthropicStream(r io.Reader) (string, error) {
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue
 		}
+		if event.Type == "error" {
+			return "", fmt.Errorf("[%s] API error: %s", label, data)
+		}
 		if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Type == "text_delta" {
 			translated.WriteString(event.Delta.Text)
 			chunks++
-			if chunks%10 == 0 {
-				fmt.Fprint(os.Stderr, ".")
+			if current := translated.Len(); current-lastProgress >= 1000 {
+				fmt.Fprintf(os.Stderr, " (%d chars)", current)
+				lastProgress = current
 			}
 		}
 		if event.Type == "message_stop" {
-			fmt.Fprintf(os.Stderr, " (%d chunks)", chunks)
+			fmt.Fprintf(os.Stderr, " done (%d chars, %d chunks)", translated.Len(), chunks)
 			return translated.String(), nil
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", err
+		if translated.Len() > 0 {
+			fmt.Fprintf(os.Stderr, " (%d chars, PARTIAL)", translated.Len())
+			dumpTranslation(translated.String())
+		}
+		return "", fmt.Errorf("[%s] %w", label, err)
 	}
+	fmt.Fprintf(os.Stderr, " done (%d chars, %d chunks)", translated.Len(), chunks)
 	return translated.String(), nil
 }
 
@@ -367,17 +501,24 @@ func validateTranslatedSRT(source, translated string) error {
 	if err != nil {
 		return fmt.Errorf("translated subtitle is invalid: %w", err)
 	}
+
+	// Build set of valid source timelines
+	sourceTimelines := make(map[string]bool, len(sourceBlocks))
+	for _, b := range sourceBlocks {
+		sourceTimelines[b.Timeline] = true
+	}
+
+	// Only validate timeline integrity — block count and numbering are allowed to differ
+	for _, b := range translatedBlocks {
+		if !sourceTimelines[b.Timeline] {
+			return fmt.Errorf("translated timeline %q not found in source", b.Timeline)
+		}
+	}
+
 	if len(sourceBlocks) != len(translatedBlocks) {
-		return fmt.Errorf("translated subtitle block count mismatch: source=%d translated=%d", len(sourceBlocks), len(translatedBlocks))
+		fmt.Fprintf(os.Stderr, "Block count differs (source=%d translated=%d), continuing\n", len(sourceBlocks), len(translatedBlocks))
 	}
-	for i := range sourceBlocks {
-		if sourceBlocks[i].Number != translatedBlocks[i].Number {
-			return fmt.Errorf("translated subtitle number mismatch at block %d", i+1)
-		}
-		if sourceBlocks[i].Timeline != translatedBlocks[i].Timeline {
-			return fmt.Errorf("translated subtitle timeline mismatch at block %s", sourceBlocks[i].Number)
-		}
-	}
+
 	return nil
 }
 
@@ -429,6 +570,15 @@ func splitSRTBatches(srt string, limit int) ([]string, error) {
 		batches = append(batches, current.String())
 	}
 	return batches, nil
+}
+
+func truncateForLabel(s string, maxLen int) string {
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", " "), "\n", " ")
+	s = strings.TrimSpace(s)
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func dumpTranslation(content string) {

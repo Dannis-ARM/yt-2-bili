@@ -212,7 +212,7 @@ func validateFlags(isSubtitleCommand bool) error {
 		if subtitleTargetLanguage != "" {
 			return fmt.Errorf("--subtitle-target-language requires --generate-subtitles")
 		}
-		if llmModelName != "deepseek-v4-pro" {
+		if llmModelName != "deepseek-v4-flash" {
 			return fmt.Errorf("--llm-model-name requires --generate-subtitles")
 		}
 		if subtitleModeStr != "" {

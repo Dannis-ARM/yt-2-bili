@@ -113,13 +113,21 @@ func TestPrepareSubtitleFilesTranslatesWhenNoChineseSRT(t *testing.T) {
 }
 
 type mockTranslator struct {
-	called    bool
-	translate func(ctx context.Context, srt string) (string, error)
+	called       bool
+	translate    func(ctx context.Context, srt string) (string, error)
+	translateText func(ctx context.Context, text string) (string, error)
 }
 
 func (m *mockTranslator) TranslateSRT(ctx context.Context, srt string) (string, error) {
 	m.called = true
 	return m.translate(ctx, srt)
+}
+
+func (m *mockTranslator) TranslateText(ctx context.Context, text string) (string, error) {
+	if m.translateText != nil {
+		return m.translateText(ctx, text)
+	}
+	return text, nil
 }
 
 func TestBuildWhisperArgsAddsModelDirectory(t *testing.T) {
@@ -237,17 +245,13 @@ func TestTranslatorSplitsBatchesWithoutSplittingBlocks(t *testing.T) {
 	}
 }
 
-func TestTranslatorRetriesInvalidStructure(t *testing.T) {
-	responses := []string{
-		"1\n00:00:02,000 --> 00:00:03,000\n你好\n\n",
-		"1\n00:00:00,000 --> 00:00:01,000\n你好\n\n",
-	}
+func TestTranslatorRejectsInvalidStructureNoRetry(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":" + strconv.Quote(responses[requests]) + "}}]}\n\n"))
-		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"1\\n00:00:02,000 --> 00:00:03,000\\n你好\\n\\n\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
 
@@ -257,15 +261,12 @@ func TestTranslatorRetriesInvalidStructure(t *testing.T) {
 		Model:   "deepseek-v4-pro",
 	})
 
-	translated, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
-	if err != nil {
-		t.Fatalf("translate failed after retry: %v", err)
+	_, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+	if err == nil {
+		t.Fatal("translation with changed timeline should fail")
 	}
-	if requests != 2 {
-		t.Fatalf("expected retry after invalid structure, got %d requests", requests)
-	}
-	if !strings.Contains(translated, "你好") {
-		t.Fatalf("expected retried Chinese subtitle, got:\n%s", translated)
+	if requests != 1 {
+		t.Fatalf("expected no retry, got %d requests", requests)
 	}
 }
 
@@ -310,6 +311,10 @@ func newStreamingTranslationServer(t *testing.T, content string) *httptest.Serve
 type failingTranslator struct{}
 
 func (failingTranslator) TranslateSRT(context.Context, string) (string, error) {
+	return "", fmt.Errorf("translator should not be called")
+}
+
+func (failingTranslator) TranslateText(context.Context, string) (string, error) {
 	return "", fmt.Errorf("translator should not be called")
 }
 
