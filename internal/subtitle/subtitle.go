@@ -391,37 +391,25 @@ func embedSoftSubtitle(videoPath, srtPath, outputPath string) error {
 }
 
 func burnSubtitle(videoPath, srtPath, outputPath string) error {
-	// Use -vf (simple filter graph) instead of -filter_complex so that
-	// audio streams are automatically passed through without explicit -map.
-	// The ffmpeg-go Filter() API uses -filter_complex which only maps the
-	// filter output (video), silently dropping all audio streams.
-	styleStr := fmt.Sprintf(
-		"FontName=%s,FontSize=18,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=10",
-		getFontName(),
-	)
-	// Escape special characters in style string for ffmpeg filter parser.
-	// Order matters: escape backslash first to avoid double-escaping.
-	styleStr = strings.ReplaceAll(styleStr, `\`, `\\`)
-	styleStr = strings.ReplaceAll(styleStr, "=", `\=`)
-	styleStr = strings.ReplaceAll(styleStr, ",", `\,`)
-	styleStr = strings.ReplaceAll(styleStr, ":", `\:`)
-
-	filterStr := fmt.Sprintf("subtitles=%s:force_style=%s", escapeFFmpegPath(srtPath), styleStr)
-
 	var stderr strings.Builder
-	cmd := exec.Command("ffmpeg",
-		"-i", videoPath,
-		"-vf", filterStr,
-		"-c:v", "libx264",
-		"-crf", "23",
-		"-preset", "medium",
-		"-c:a", "copy",
-		"-y",
-		outputPath,
-	)
-	cmd.Stderr = &stderr
+	err := ffmpeg_go.Input(videoPath).
+		Filter("subtitles", ffmpeg_go.Args{escapeFFmpegPath(srtPath)},
+			ffmpeg_go.KwArgs{
+				"force_style": fmt.Sprintf("FontName=%s,FontSize=18,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=10",
+					getFontName()),
+			}).
+		Output(outputPath, ffmpeg_go.KwArgs{
+			"c:a":    "copy",
+			"c:v":    "libx264",
+			"crf":    "23",
+			"preset": "medium",
+			"map":    "0:a",
+		}).
+		OverWriteOutput().
+		WithErrorOutput(&stderr).
+		Run()
 
-	if err := cmd.Run(); err != nil {
+	if err != nil {
 		return fmt.Errorf("ffmpeg subtitle burning failed: %w\nstderr: %s", err, stderr.String())
 	}
 	return nil
