@@ -101,6 +101,12 @@ func (t *LLMTranslator) TranslateSRT(ctx context.Context, srt string) (string, e
 		if err != nil {
 			return "", err
 		}
+		// Fill missing entries with original text (LLM may skip some markers)
+		for j, t := range parsed {
+			if t == "" && j < len(batch) {
+				parsed[j] = batch[j].Text
+			}
+		}
 		texts = append(texts, parsed...)
 	}
 
@@ -367,7 +373,6 @@ func batchSRTBlocks(blocks []srtBlock, limit int) [][]srtBlock {
 	currentLen := 0
 	for _, block := range blocks {
 		if len(block.Text) > limit {
-			// Single block exceeds limit — still process it alone
 			batches = append(batches, []srtBlock{block})
 			continue
 		}
@@ -400,19 +405,30 @@ func buildTextInput(blocks []srtBlock) string {
 
 var textMarkerRe = regexp.MustCompile(`(?m)^\[(\d+)\]\s*`)
 
+// parseTextOutput extracts translated texts from LLM response.
+// It matches [N] markers positionally (first marker → index 0, second → index 1, ...).
+// If fewer markers than expected, remaining entries are left empty for the caller to fill.
 func parseTextOutput(output string, expectedCount int) ([]string, error) {
 	matches := textMarkerRe.FindAllStringSubmatchIndex(output, -1)
-	if len(matches) != expectedCount {
-		return nil, fmt.Errorf("expected %d translated entries, got %d", expectedCount, len(matches))
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no translated entries found in response")
 	}
-	texts := make([]string, 0, len(matches))
+
+	if len(matches) != expectedCount {
+		fmt.Fprintf(os.Stderr, "Warning: expected %d entries, got %d markers — missing entries will use original text\n", expectedCount, len(matches))
+	}
+
+	texts := make([]string, expectedCount)
 	for i, m := range matches {
+		if i >= expectedCount {
+			break
+		}
 		textStart := m[1]
 		textEnd := len(output)
 		if i+1 < len(matches) {
 			textEnd = matches[i+1][0]
 		}
-		texts = append(texts, strings.TrimSpace(output[textStart:textEnd]))
+		texts[i] = strings.TrimSpace(output[textStart:textEnd])
 	}
 	return texts, nil
 }

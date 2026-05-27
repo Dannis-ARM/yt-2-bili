@@ -192,8 +192,8 @@ func TestTranslatorStreamsChineseSRT(t *testing.T) {
 	}
 }
 
-func TestTranslatorRejectsWrongEntryCount(t *testing.T) {
-	// LLM returns fewer entries than expected
+func TestTranslatorFillsMissingEntriesWithOriginalText(t *testing.T) {
+	// LLM returns fewer entries — missing ones use original text
 	server := newStreamingTranslationServer(t, "[1] 你好\n")
 	defer server.Close()
 
@@ -204,12 +204,15 @@ func TestTranslatorRejectsWrongEntryCount(t *testing.T) {
 	})
 
 	// Source has 2 blocks but LLM returns 1 entry
-	_, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n\n2\n00:00:01,000 --> 00:00:02,000\nWorld\n")
-	if err == nil {
-		t.Fatal("translation with wrong entry count should fail")
+	result, err := translator.TranslateSRT(context.Background(), "1\n00:00:00,000 --> 00:00:01,000\nHello\n\n2\n00:00:01,000 --> 00:00:02,000\nWorld\n")
+	if err != nil {
+		t.Fatalf("translate should not fail on missing entries: %v", err)
 	}
-	if !strings.Contains(err.Error(), "expected 2 translated entries, got 1") {
-		t.Fatalf("expected entry count error, got: %v", err)
+	if !strings.Contains(result, "你好") {
+		t.Fatal("expected first entry translated")
+	}
+	if !strings.Contains(result, "World") {
+		t.Fatal("expected second entry to keep original text")
 	}
 }
 
