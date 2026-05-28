@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/dannis/yt-2-bili/internal/subtitle/srt"
 )
 
 func TestBreakSentencesShortEntryUnchanged(t *testing.T) {
@@ -15,7 +18,7 @@ func TestBreakSentencesShortEntryUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	blocks, err := parseSRTBlocks(output)
+	blocks, err := srt.Parse(output)
 	if err != nil {
 		t.Fatalf("output parse failed: %v", err)
 	}
@@ -25,8 +28,11 @@ func TestBreakSentencesShortEntryUnchanged(t *testing.T) {
 	if blocks[0].Number != "1" {
 		t.Fatalf("expected number 1, got %s", blocks[0].Number)
 	}
-	if blocks[0].Timeline != "00:00:00,000 --> 00:00:03,000" {
-		t.Fatalf("timeline changed: %s", blocks[0].Timeline)
+	if blocks[0].Start != 0 {
+		t.Fatalf("unexpected start: %v", blocks[0].Start)
+	}
+	if blocks[0].End != 3*time.Second {
+		t.Fatalf("unexpected end: %v", blocks[0].End)
 	}
 }
 
@@ -37,7 +43,7 @@ func TestBreakSentencesSplitsLongCharEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	blocks, err := parseSRTBlocks(output)
+	blocks, err := srt.Parse(output)
 	if err != nil {
 		t.Fatalf("output parse failed: %v", err)
 	}
@@ -58,7 +64,7 @@ func TestBreakSentencesSplitsLongDurationEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	blocks, err := parseSRTBlocks(output)
+	blocks, err := srt.Parse(output)
 	if err != nil {
 		t.Fatalf("output parse failed: %v", err)
 	}
@@ -73,7 +79,7 @@ func TestBreakSentencesMultipleBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	blocks, err := parseSRTBlocks(output)
+	blocks, err := srt.Parse(output)
 	if err != nil {
 		t.Fatalf("output parse failed: %v", err)
 	}

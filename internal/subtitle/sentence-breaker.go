@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dannis/yt-2-bili/internal/subtitle/srt"
 )
 
 const (
@@ -22,19 +24,15 @@ type timedSegment struct {
 
 // BreakSentences is a safety net that only splits blocks exceeding maxCharsPerEntry or maxDurationPerEntry.
 // It trusts that whisper-ctranslate2 has already done proper sentence segmentation via its configuration.
-func BreakSentences(srt string) (string, error) {
-	blocks, err := parseSRTBlocks(srt)
+func BreakSentences(srtContent string) (string, error) {
+	blocks, err := srt.Parse(srtContent)
 	if err != nil {
 		return "", fmt.Errorf("sentence breaking: %w", err)
 	}
 
-	var result []srtBlock
+	var result []srt.Block
 	for _, block := range blocks {
-		start, end, err := parseSRTTimeline(block.Timeline)
-		if err != nil {
-			return "", fmt.Errorf("sentence breaking: %w", err)
-		}
-		splitBlocks := splitBlockIfNeeded(block, start, end)
+		splitBlocks := splitBlockIfNeeded(block)
 		result = append(result, splitBlocks...)
 	}
 
@@ -43,16 +41,16 @@ func BreakSentences(srt string) (string, error) {
 		result[i].Text = cleanText(result[i].Text)
 	}
 
-	return joinSRTBlocks(result), nil
+	return srt.Format(result), nil
 }
 
-func splitBlockIfNeeded(block srtBlock, start, end time.Duration) []srtBlock {
+func splitBlockIfNeeded(block srt.Block) []srt.Block {
 	text := strings.Join(extractTextLines(block.Text), " ")
-	duration := end - start
+	duration := block.End - block.Start
 	chars := charCount(text)
 
 	if duration <= maxDurationPerEntry && chars <= maxCharsPerEntry {
-		return []srtBlock{block}
+		return []srt.Block{block}
 	}
 
 	numParts := 1
@@ -67,13 +65,13 @@ func splitBlockIfNeeded(block srtBlock, start, end time.Duration) []srtBlock {
 	}
 
 	if numParts <= 1 {
-		return []srtBlock{block}
+		return []srt.Block{block}
 	}
 
-	return splitBlockEvenly(text, start, end, numParts)
+	return splitBlockEvenly(text, block.Start, block.End, numParts)
 }
 
-func splitBlockEvenly(text string, start, end time.Duration, numParts int) []srtBlock {
+func splitBlockEvenly(text string, start, end time.Duration, numParts int) []srt.Block {
 	runes := []rune(text)
 	totalChars := len(runes)
 	totalDuration := end - start
@@ -116,11 +114,12 @@ func splitBlockEvenly(text string, start, end time.Duration, numParts int) []srt
 		current = partEnd
 	}
 
-	blocks := make([]srtBlock, len(result))
+	blocks := make([]srt.Block, len(result))
 	for i, seg := range result {
-		blocks[i] = srtBlock{
-			Timeline: formatSRTTimeline(seg.start, seg.end),
-			Text:     seg.text,
+		blocks[i] = srt.Block{
+			Start: seg.start,
+			End:   seg.end,
+			Text:  seg.text,
 		}
 	}
 	return blocks
@@ -145,56 +144,6 @@ func charCount(s string) int {
 	return len([]rune(s))
 }
 
-func parseSRTTimeline(timeline string) (time.Duration, time.Duration, error) {
-	parts := strings.SplitN(timeline, " --> ", 2)
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid timeline: %s", timeline)
-	}
-	start, err := parseSRTTime(strings.TrimSpace(parts[0]))
-	if err != nil {
-		return 0, 0, err
-	}
-	end, err := parseSRTTime(strings.TrimSpace(parts[1]))
-	if err != nil {
-		return 0, 0, err
-	}
-	return start, end, nil
-}
-
-func parseSRTTime(s string) (time.Duration, error) {
-	s = strings.ReplaceAll(s, ".", ",")
-	parts := strings.SplitN(s, ",", 2)
-	if len(parts) != 2 {
-		return 0, fmt.Errorf("invalid srt time: %s", s)
-	}
-	timeParts := strings.SplitN(parts[0], ":", 3)
-	if len(timeParts) != 3 {
-		return 0, fmt.Errorf("invalid srt time: %s", s)
-	}
-	h, _ := strconv.Atoi(timeParts[0])
-	m, _ := strconv.Atoi(timeParts[1])
-	sec, _ := strconv.Atoi(timeParts[2])
-	millis, _ := strconv.Atoi((parts[1] + "000")[:3])
-
-	return time.Duration(h)*time.Hour +
-		time.Duration(m)*time.Minute +
-		time.Duration(sec)*time.Second +
-		time.Duration(millis)*time.Millisecond, nil
-}
-
-func formatSRTTimeline(start, end time.Duration) string {
-	return formatSRTTime(start) + " --> " + formatSRTTime(end)
-}
-
-func formatSRTTime(d time.Duration) string {
-	ms := d.Milliseconds()
-	h := ms / 3600000
-	m := (ms % 3600000) / 60000
-	s := (ms % 60000) / 1000
-	millis := ms % 1000
-	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, s, millis)
-}
-
 func extractTextLines(text string) []string {
 	text = strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
@@ -213,12 +162,4 @@ func extractTextLines(text string) []string {
 
 func cleanText(text string) string {
 	return strings.Join(extractTextLines(text), "\n")
-}
-
-func joinSRTBlocks(blocks []srtBlock) string {
-	parts := make([]string, len(blocks))
-	for i, b := range blocks {
-		parts[i] = b.Number + "\n" + b.Timeline + "\n" + b.Text
-	}
-	return strings.Join(parts, "\n\n") + "\n"
 }

@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -27,23 +26,6 @@ func TestSubtitleOutputPaths(t *testing.T) {
 	}
 	if got := chineseSubtitledVideoPath(video); got != `C:\tmp\abc123.zh.subtitled.mp4` {
 		t.Fatalf("unexpected Chinese subtitled video path: %s", got)
-	}
-}
-
-func TestBuildWhisperArgsUsesOnlyExplicitOptions(t *testing.T) {
-	args := buildWhisperArgs(Options{VideoPath: `C:\tmp\abc123.mp4`})
-	expected := []string{
-		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
-		"--batched", "True", "--vad_filter", "True",
-		"--vad_min_silence_duration_ms", "400",
-		"--word_timestamps", "True",
-		"--max_line_width", "42",
-		"--max_line_count", "1",
-		"--compute_type", "int8",
-	}
-
-	if !reflect.DeepEqual(args, expected) {
-		t.Fatalf("unexpected args:\nwant: %#v\n got: %#v", expected, args)
 	}
 }
 
@@ -128,49 +110,6 @@ func (m *mockTranslator) TranslateText(ctx context.Context, text string) (string
 		return m.translateText(ctx, text)
 	}
 	return text, nil
-}
-
-func TestBuildWhisperArgsAddsModelDirectory(t *testing.T) {
-	args := buildWhisperArgs(Options{
-		VideoPath:      `C:\tmp\abc123.mp4`,
-		ModelDirectory: `E:\Models\faster-whisper-large-v3`,
-	})
-	expected := []string{
-		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
-		"--batched", "True", "--vad_filter", "True",
-		"--vad_min_silence_duration_ms", "400",
-		"--word_timestamps", "True",
-		"--max_line_width", "42",
-		"--max_line_count", "1",
-		"--compute_type", "int8",
-		"--model_directory", `E:\Models\faster-whisper-large-v3`,
-	}
-
-	if !reflect.DeepEqual(args, expected) {
-		t.Fatalf("unexpected args:\nwant: %#v\n got: %#v", expected, args)
-	}
-}
-
-func TestBuildWhisperArgsAddsDeviceAndComputeType(t *testing.T) {
-	args := buildWhisperArgs(Options{
-		VideoPath:          `C:\tmp\abc123.mp4`,
-		WhisperDevice:      "cuda",
-		WhisperComputeType: "float16",
-	})
-	expected := []string{
-		`C:\tmp\abc123.mp4`, "--output_format", "srt", "--output_dir", `C:\tmp`,
-		"--batched", "True", "--vad_filter", "True",
-		"--vad_min_silence_duration_ms", "400",
-		"--word_timestamps", "True",
-		"--max_line_width", "42",
-		"--max_line_count", "1",
-		"--compute_type", "float16",
-		"--device", "cuda",
-	}
-
-	if !reflect.DeepEqual(args, expected) {
-		t.Fatalf("unexpected args:\nwant: %#v\n got: %#v", expected, args)
-	}
 }
 
 func TestTranslatorStreamsChineseSRT(t *testing.T) {

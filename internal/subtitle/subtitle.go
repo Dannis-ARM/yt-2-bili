@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
-	ffmpeg_go "github.com/u2takey/ffmpeg-go"
+	"github.com/dannis/yt-2-bili/internal/ffmpeg"
+	"github.com/dannis/yt-2-bili/internal/subtitle/srt"
+	"github.com/dannis/yt-2-bili/internal/subtitle/whisper"
 )
 
 // Mode represents the subtitle embedding mode.
@@ -65,14 +65,11 @@ type Result struct {
 }
 
 func CheckAvailable(whisperPath string) error {
-	if _, err := exec.LookPath(resolveWhisperPath(whisperPath)); err != nil {
-		return fmt.Errorf("whisper not found: %w", err)
+	if err := whisper.CheckAvailable(whisperPath); err != nil {
+		return err
 	}
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg not found: %w", err)
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		return fmt.Errorf("ffprobe not found: %w", err)
+	if err := ffmpeg.CheckAvailable(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -104,7 +101,7 @@ func EnsureSubtitled(opts Options) (*Result, error) {
 
 	// Check if we can reuse existing output
 	if !opts.Force {
-		if opts.SubtitleMode == ModeSoft && hasSubtitleStream(result.SubtitledVideoPath) {
+		if opts.SubtitleMode == ModeSoft && ffmpeg.HasSubtitleStream(result.SubtitledVideoPath) {
 			result.ReusedSubtitled = true
 			return result, nil
 		}
@@ -120,17 +117,17 @@ func EnsureSubtitled(opts Options) (*Result, error) {
 	start := time.Now()
 	if opts.SubtitleMode == ModeSoft {
 		fmt.Fprintf(os.Stderr, "Embedding soft subtitles with ffmpeg... ")
-		if err := embedSoftSubtitle(opts.VideoPath, subtitleForEmbedding, result.SubtitledVideoPath); err != nil {
+		if err := ffmpeg.EmbedSoftSubtitle(opts.VideoPath, subtitleForEmbedding, result.SubtitledVideoPath); err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED\n")
 			return nil, err
 		}
-		if !hasSubtitleStream(result.SubtitledVideoPath) {
+		if !ffmpeg.HasSubtitleStream(result.SubtitledVideoPath) {
 			fmt.Fprintf(os.Stderr, "FAILED\n")
 			return nil, fmt.Errorf("ffmpeg finished but output has no subtitle stream: %s", result.SubtitledVideoPath)
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "Burning subtitles with ffmpeg... ")
-		if err := burnSubtitle(opts.VideoPath, subtitleForEmbedding, result.SubtitledVideoPath); err != nil {
+		if err := ffmpeg.BurnSubtitle(opts.VideoPath, subtitleForEmbedding, result.SubtitledVideoPath); err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED\n")
 			return nil, err
 		}
@@ -175,7 +172,14 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 		// Stage: Whisper SRT generation
 		start := time.Now()
 		fmt.Fprintf(os.Stderr, "Generating SRT with Whisper... ")
-		if err := generateSRT(opts, srtPath); err != nil {
+		whisperOpts := whisper.Options{
+			VideoPath:          opts.VideoPath,
+			WhisperPath:        opts.WhisperPath,
+			ModelDirectory:     opts.ModelDirectory,
+			WhisperDevice:      opts.WhisperDevice,
+			WhisperComputeType: opts.WhisperComputeType,
+		}
+		if err := whisper.GenerateSRT(whisperOpts, srtPath); err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED\n")
 			return nil, err
 		}
@@ -183,18 +187,18 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 			fmt.Fprintf(os.Stderr, "FAILED\n")
 			return nil, fmt.Errorf("whisper finished but subtitle file was not created: %s", srtPath)
 		}
-		entries, _ := countSRTBlocks(srtPath)
+		entries, _ := srt.CountBlocks(srtPath)
 		fmt.Fprintf(os.Stderr, "done (%v) — %d entries, %s\n", time.Since(start).Round(time.Millisecond), entries, fileSizeStr(srtPath))
 
 		// Stage: Sentence breaking
 		start = time.Now()
-		entriesBefore, _ := countSRTBlocks(srtPath)
+		entriesBefore, _ := srt.CountBlocks(srtPath)
 		fmt.Fprintf(os.Stderr, "Applying sentence breaking... ")
 		if err := applySentenceBreaking(srtPath); err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED\n")
 			return nil, err
 		}
-		entriesAfter, _ := countSRTBlocks(srtPath)
+		entriesAfter, _ := srt.CountBlocks(srtPath)
 		fmt.Fprintf(os.Stderr, "done (%v) — %d → %d entries\n", time.Since(start).Round(time.Millisecond), entriesBefore, entriesAfter)
 	} else {
 		fmt.Fprintf(os.Stderr, "Reusing existing SRT: %s (%s)\n", srtPath, fileSizeStr(srtPath))
@@ -274,17 +278,10 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 		fmt.Fprintf(os.Stderr, "FAILED\n")
 		return nil, err
 	}
-	entries, _ := countSRTBlocks(zhPath)
+	entries, _ := srt.CountBlocks(zhPath)
 	fmt.Fprintf(os.Stderr, "done (%v) — %d entries, %s\n", time.Since(start).Round(time.Millisecond), entries, fileSizeStr(zhPath))
 
 	return result, nil
-}
-
-func resolveWhisperPath(customPath string) string {
-	if customPath != "" {
-		return customPath
-	}
-	return "whisper"
 }
 
 func subtitlePath(videoPath string) string {
@@ -327,154 +324,4 @@ func chineseSubtitledVideoPathForMode(videoPath string, mode Mode) string {
 		return base + ".zh.subtitled.mp4"
 	}
 	return base + ".zh.burned.mp4"
-}
-
-func generateSRT(opts Options, expectedSRTPath string) error {
-	args := buildWhisperArgs(opts)
-	cmd := exec.Command(resolveWhisperPath(opts.WhisperPath), args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("whisper subtitle generation failed: %w\nstderr: %s", err, stderr.String())
-	}
-	if !isNonEmptyFile(expectedSRTPath) {
-		return fmt.Errorf("expected whisper output was not found: %s", expectedSRTPath)
-	}
-	return nil
-}
-
-func buildWhisperArgs(opts Options) []string {
-	args := []string{
-		opts.VideoPath,
-		"--output_format", "srt",
-		"--output_dir", filepath.Dir(opts.VideoPath),
-		"--batched", "True",
-		"--vad_filter", "True",
-		"--vad_min_silence_duration_ms", "400",
-		"--word_timestamps", "True",
-		"--max_line_width", "42",
-		"--max_line_count", "1",
-	}
-	if opts.WhisperComputeType != "" {
-		args = append(args, "--compute_type", opts.WhisperComputeType)
-	} else {
-		args = append(args, "--compute_type", "int8")
-	}
-	if opts.ModelDirectory != "" {
-		args = append(args, "--model_directory", opts.ModelDirectory)
-	}
-	if opts.WhisperDevice != "" {
-		args = append(args, "--device", opts.WhisperDevice)
-	}
-	return args
-}
-
-func embedSoftSubtitle(videoPath, srtPath, outputPath string) error {
-	videoStream := ffmpeg_go.Input(videoPath)
-	subtitleStream := ffmpeg_go.Input(srtPath)
-
-	var stderr strings.Builder
-	err := ffmpeg_go.Output([]*ffmpeg_go.Stream{videoStream, subtitleStream}, outputPath,
-		ffmpeg_go.KwArgs{
-			"c:v": "copy",
-			"c:a": "copy",
-			"c:s": "mov_text",
-		}).
-		OverWriteOutput().
-		WithErrorOutput(&stderr).
-		Run()
-
-	if err != nil {
-		return fmt.Errorf("ffmpeg soft subtitle embedding failed: %w\nstderr: %s", err, stderr.String())
-	}
-	return nil
-}
-
-func burnSubtitle(videoPath, srtPath, outputPath string) error {
-	var stderr strings.Builder
-	err := ffmpeg_go.Input(videoPath).
-		Filter("subtitles", ffmpeg_go.Args{escapeFFmpegPath(srtPath)},
-			ffmpeg_go.KwArgs{
-				"force_style": fmt.Sprintf("FontName=%s,FontSize=18,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=10",
-					getFontName()),
-			}).
-		Output(outputPath, ffmpeg_go.KwArgs{
-			"c:a":    "copy",
-			"c:v":    "libx264",
-			"crf":    "23",
-			"preset": "medium",
-			"map":    "0:a",
-		}).
-		OverWriteOutput().
-		WithErrorOutput(&stderr).
-		Run()
-
-	if err != nil {
-		return fmt.Errorf("ffmpeg subtitle burning failed: %w\nstderr: %s", err, stderr.String())
-	}
-	return nil
-}
-
-func escapeFFmpegPath(path string) string {
-	// For ffmpeg's subtitles filter, need to escape colon, backslash, and single quote
-	path = strings.ReplaceAll(path, "\\", "\\\\")
-	path = strings.ReplaceAll(path, ":", "\\:")
-	path = strings.ReplaceAll(path, "'", "\\'")
-	return path
-}
-
-func getFontName() string {
-	switch runtime.GOOS {
-	case "windows":
-		return "Microsoft YaHei" // 微软雅黑
-	case "darwin":
-		return "PingFang SC" // 苹方
-	default:
-		// Linux - try common CJK fonts
-		return "Noto Sans CJK SC"
-	}
-}
-
-func hasSubtitleStream(videoPath string) bool {
-	if !isNonEmptyFile(videoPath) {
-		return false
-	}
-	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "s", "-show_entries", "stream=index", "-of", "csv=p=0", videoPath)
-	output, err := cmd.Output()
-	return err == nil && strings.TrimSpace(string(output)) != ""
-}
-
-func isNonEmptyFile(path string) bool {
-	stat, err := os.Stat(path)
-	return err == nil && stat.Size() > 0 && !stat.IsDir()
-}
-
-func countSRTBlocks(path string) (int, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	blocks, err := parseSRTBlocks(string(data))
-	if err != nil {
-		return 0, err
-	}
-	return len(blocks), nil
-}
-
-func fileSizeStr(path string) string {
-	stat, err := os.Stat(path)
-	if err != nil {
-		return "?"
-	}
-	size := stat.Size()
-	switch {
-	case size >= 1<<30:
-		return fmt.Sprintf("%.1f GB", float64(size)/float64(1<<30))
-	case size >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(size)/float64(1<<20))
-	case size >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(size)/float64(1<<10))
-	default:
-		return fmt.Sprintf("%d B", size)
-	}
 }

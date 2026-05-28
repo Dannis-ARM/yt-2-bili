@@ -8,9 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	ffmpeg_go "github.com/u2takey/ffmpeg-go"
-
 	"github.com/dannis/yt-2-bili/internal/biliup"
+	"github.com/dannis/yt-2-bili/internal/ffmpeg"
 	"github.com/dannis/yt-2-bili/internal/subtitle"
 	"github.com/dannis/yt-2-bili/internal/ytdlp"
 )
@@ -198,26 +197,7 @@ func Run(opts Options) error {
 }
 
 func prepareCoverForUpload(coverPath string) string {
-	if coverPath == "" || !strings.EqualFold(filepath.Ext(coverPath), ".webp") {
-		return coverPath
-	}
-
-	jpgPath := strings.TrimSuffix(coverPath, filepath.Ext(coverPath)) + ".jpg"
-	var stderr strings.Builder
-	err := ffmpeg_go.Input(coverPath).
-		Output(jpgPath, ffmpeg_go.KwArgs{
-			"frames:v": "1",
-			"update":   "1",
-		}).
-		OverWriteOutput().
-		WithErrorOutput(&stderr).
-		Run()
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to convert webp cover to jpg, using original cover: %v\nstderr: %s\n", err, stderr.String())
-		return coverPath
-	}
-	return jpgPath
+	return ffmpeg.ConvertCover(coverPath)
 }
 
 func buildBilibiliDesc(originalDesc, uploader, youtubeURL string) string {

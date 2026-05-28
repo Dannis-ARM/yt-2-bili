@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/dannis/yt-2-bili/internal/subtitle/srt"
 )
 
 const (
@@ -60,7 +62,7 @@ func (e nonRetryableError) Unwrap() error {
 func NewLLMTranslator(opts LLMTranslatorOptions) *LLMTranslator {
 	client := opts.Client
 	if client == nil {
-		client = &http.Client{Timeout: translationRequestTimeout}
+	client = &http.Client{Timeout: translationRequestTimeout}
 	}
 	batchCharLimit := opts.BatchCharLimit
 	if batchCharLimit == 0 {
@@ -80,8 +82,8 @@ func NewLLMTranslator(opts LLMTranslatorOptions) *LLMTranslator {
 	}
 }
 
-func (t *LLMTranslator) TranslateSRT(ctx context.Context, srt string) (string, error) {
-	blocks, err := parseSRTBlocks(srt)
+func (t *LLMTranslator) TranslateSRT(ctx context.Context, srtContent string) (string, error) {
+	blocks, err := srt.Parse(srtContent)
 	if err != nil {
 		return "", err
 	}
@@ -101,7 +103,7 @@ func (t *LLMTranslator) TranslateSRT(ctx context.Context, srt string) (string, e
 		if err != nil {
 			return "", err
 		}
-		// Fill missing entries with original text (LLM may skip some markers)
+		// Fill missing entries with original text (LLM might skip some markers)
 		for j, t := range parsed {
 			if t == "" && j < len(batch) {
 				parsed[j] = batch[j].Text
@@ -195,22 +197,22 @@ func (t *LLMTranslator) translateOpenAI(ctx context.Context, input string, syste
 }
 
 type openAIChatRequest struct {
-	Model    string         `json:"model"`
-	Stream   bool           `json:"stream"`
-	Messages []openAIMessage `json:"messages"`
+	Model    string
+	Stream   bool
+	Messages []openAIMessage
 }
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string
+	Content string
 }
 
 type openAIStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
-		} `json:"delta"`
-	} `json:"choices"`
+			Content string
+		}
+	}
 }
 
 func readOpenAIStream(r io.Reader, label string) (string, error) {
@@ -225,7 +227,7 @@ func readOpenAIStream(r io.Reader, label string) (string, error) {
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
-			fmt.Fprintf(os.Stderr, " done (%d chars, %d chunks)", translated.Len(), chunks)
+			fmt.Fprintf(os.Stderr, "done (%d chars, %d chunks)", translated.Len(), chunks)
 			return translated.String(), nil
 		}
 		var chunk openAIStreamChunk
@@ -248,7 +250,7 @@ func readOpenAIStream(r io.Reader, label string) (string, error) {
 		}
 		return "", fmt.Errorf("[%s] %w", label, err)
 	}
-	fmt.Fprintf(os.Stderr, " done (%d chars, %d chunks)", translated.Len(), chunks)
+	fmt.Fprintf(os.Stderr, "done (%d chars, %d chunks)", translated.Len(), chunks)
 	return translated.String(), nil
 }
 
@@ -298,29 +300,29 @@ func (t *LLMTranslator) translateAnthropic(ctx context.Context, input string, sy
 }
 
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system"`
-	Messages  []anthropicMessage `json:"messages"`
-	Stream    bool               `json:"stream"`
+	Model     string
+	MaxTokens int
+	System    string
+	Messages  []anthropicMessage
+	Stream    bool
 	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicThinking struct {
-	Type string `json:"type"`
+	Type string
 }
 
 type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string
+	Content string
 }
 
 type anthropicSSEEvent struct {
-	Type  string `json:"type"`
+	Type  string
 	Delta *struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"delta"`
+		Type string
+		Text string
+	}
 }
 
 func readAnthropicStream(r io.Reader, label string) (string, error) {
@@ -350,7 +352,7 @@ func readAnthropicStream(r io.Reader, label string) (string, error) {
 			}
 		}
 		if event.Type == "message_stop" {
-			fmt.Fprintf(os.Stderr, " done (%d chars, %d chunks)", translated.Len(), chunks)
+			fmt.Fprintf(os.Stderr, "done (%d chars, %d chunks)", translated.Len(), chunks)
 			return translated.String(), nil
 		}
 	}
@@ -361,19 +363,19 @@ func readAnthropicStream(r io.Reader, label string) (string, error) {
 		}
 		return "", fmt.Errorf("[%s] %w", label, err)
 	}
-	fmt.Fprintf(os.Stderr, " done (%d chars, %d chunks)", translated.Len(), chunks)
+	fmt.Fprintf(os.Stderr, "done (%d chars, %d chunks)", translated.Len(), chunks)
 	return translated.String(), nil
 }
 
 // ---- SRT text-only helpers ----
 
-func batchSRTBlocks(blocks []srtBlock, limit int) [][]srtBlock {
-	var batches [][]srtBlock
-	var current []srtBlock
+func batchSRTBlocks(blocks []srt.Block, limit int) [][]srt.Block {
+	var batches [][]srt.Block
+	var current []srt.Block
 	currentLen := 0
 	for _, block := range blocks {
 		if len(block.Text) > limit {
-			batches = append(batches, []srtBlock{block})
+			batches = append(batches, []srt.Block{block})
 			continue
 		}
 		sep := 0
@@ -395,12 +397,12 @@ func batchSRTBlocks(blocks []srtBlock, limit int) [][]srtBlock {
 	return batches
 }
 
-func buildTextInput(blocks []srtBlock) string {
-	var b strings.Builder
+func buildTextInput(blocks []srt.Block) string {
+	var sb strings.Builder
 	for i, block := range blocks {
-		fmt.Fprintf(&b, "[%d] %s\n", i+1, block.Text)
+		fmt.Fprintf(&sb, "[%d] %s\n", i+1, block.Text)
 	}
-	return b.String()
+	return sb.String()
 }
 
 var textMarkerRe = regexp.MustCompile(`(?m)^\[(\d+)\]\s*`)
@@ -433,44 +435,40 @@ func parseTextOutput(output string, expectedCount int) ([]string, error) {
 	return texts, nil
 }
 
-func reconstructSRT(blocks []srtBlock, texts []string) string {
-	var out strings.Builder
+func reconstructSRT(blocks []srt.Block, texts []string) string {
+	// Create new blocks with translated text
+	translatedBlocks := make([]srt.Block, len(blocks))
 	for i, block := range blocks {
-		if i > 0 {
-			out.WriteString("\n\n")
+		translatedBlocks[i] = block
+		if i < len(texts) {
+			translatedBlocks[i].Text = texts[i]
 		}
-		fmt.Fprintf(&out, "%s\n%s\n%s", block.Number, block.Timeline, texts[i])
 	}
-	out.WriteString("\n")
-	return out.String()
+	return srt.Format(translatedBlocks)
 }
 
 // ---- Shared ----
 
-type srtBlock struct {
-	Number   string
-	Timeline string
-	Text     string // text lines only (everything after timeline)
-}
-
 func validateTranslatedSRT(source, translated string) error {
-	sourceBlocks, err := parseSRTBlocks(source)
+	sourceBlocks, err := srt.Parse(source)
 	if err != nil {
 		return fmt.Errorf("source subtitle is invalid: %w", err)
 	}
-	translatedBlocks, err := parseSRTBlocks(translated)
+	translatedBlocks, err := srt.Parse(translated)
 	if err != nil {
 		return fmt.Errorf("translated subtitle is invalid: %w", err)
 	}
 
+	// Build a map of source timelines for validation
 	sourceTimelines := make(map[string]bool, len(sourceBlocks))
 	for _, b := range sourceBlocks {
-		sourceTimelines[b.Timeline] = true
+		sourceTimelines[formatTimeline(b.Start, b.End)] = true
 	}
 
 	for _, b := range translatedBlocks {
-		if !sourceTimelines[b.Timeline] {
-			return fmt.Errorf("translated timeline %q not found in source", b.Timeline)
+		tl := formatTimeline(b.Start, b.End)
+		if !sourceTimelines[tl] {
+			return fmt.Errorf("translated timeline %q not found in source", tl)
 		}
 	}
 
@@ -481,25 +479,17 @@ func validateTranslatedSRT(source, translated string) error {
 	return nil
 }
 
-func parseSRTBlocks(srt string) ([]srtBlock, error) {
-	normalized := strings.ReplaceAll(strings.TrimSpace(srt), "\r\n", "\n")
-	rawBlocks := strings.Split(normalized, "\n\n")
-	blocks := make([]srtBlock, 0, len(rawBlocks))
-	for _, raw := range rawBlocks {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		lines := strings.Split(raw, "\n")
-		if len(lines) < 3 {
-			continue
-		}
-		number := strings.TrimSpace(lines[0])
-		timeline := strings.TrimSpace(lines[1])
-		text := strings.Join(lines[2:], "\n")
-		blocks = append(blocks, srtBlock{Number: number, Timeline: timeline, Text: text})
-	}
-	return blocks, nil
+func formatTimeline(start, end time.Duration) string {
+	return formatTime(start) + " --> " + formatTime(end)
+}
+
+func formatTime(d time.Duration) string {
+	ms := d.Milliseconds()
+	h := ms / 3600000
+	m := (ms % 3600000) / 60000
+	s := (ms % 60000) / 1000
+	millis := ms % 1000
+	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, s, millis)
 }
 
 func truncateForLabel(s string, maxLen int) string {
