@@ -1,352 +1,64 @@
 # yt-2-bili
 
-A Go command-line tool that uses `yt-dlp` to download YouTube videos and `biliup-rs` to upload videos to Bilibili.
+YouTube → Bilibili 搬运工具，基于 `yt-dlp` + `biliup-rs`。
 
 ## Requirements
 
-Install these tools first and make sure they are available in `PATH`:
-
-- `yt-dlp`
-- `bun` for yt-dlp JavaScript runtime
-- `biliup-rs`
-
-Optional for subtitle generation:
-
-- `whisper` or `whisper-ctranslate2`
-- `ffmpeg`
-- `ffprobe`
-
-Install faster Whisper and download the default local model:
+- `yt-dlp` + `bun`（JavaScript runtime）
+- `biliup-rs`（上传用）
+- 可选：`whisper-ctranslate2`、`ffmpeg`、`ffprobe`（字幕用）
 
 ```powershell
-.\install-faster-whisper.ps1
+.\install-faster-whisper.ps1   # 安装 faster-whisper
+biliup login                    # 登录 Bilibili
 ```
 
-The script downloads `Systran/faster-whisper-large-v3` to `E:\Models\faster-whisper-large-v3` via `https://hf-mirror.com` by default. Choose a different model directory with `-LocalDir`, then pass the same path to `--whisper-model-directory` when using `whisper-ctranslate2`.
-
-```powershell
-.\install-faster-whisper.ps1 -LocalDir "D:\Models\faster-whisper-large-v3"
-```
-
-Log in to Bilibili before uploading:
-
-```bash
-biliup login
-```
-
-This creates a `cookies.json` file that `yt-2-bili` can use.
-
-## Build
+## Build & Deploy
 
 ```bash
 go build -o yt-2-bili.exe ./cmd/yt-2-bili
 ```
 
-## Deploy
-
-On Windows, use the provided script to deploy to `$env:USERPROFILE\.local\bin`:
-
 ```powershell
-.\deploy.ps1
+.\deploy.ps1   # 部署到 $env:USERPROFILE\.local\bin
 ```
-
-Make sure `$env:USERPROFILE\.local\bin` is in your `PATH`.
 
 ## Commands
 
-### Download from YouTube
-
-```bash
-yt-2-bili download <youtube-url>
-```
-
-Downloads the video, metadata, and thumbnail using `yt-dlp`. By default, it prefers MP4/M4A formats and merges output to MP4 for better Bilibili compatibility.
-
-If `<video-id>.mp4` already exists in the output directory and is not empty, the existing file is reused. Use `--force-download` to download again. `yt-dlp`'s default partial download resume behavior remains enabled.
-
-Generate subtitles during download:
-
-```bash
-yt-2-bili download --generate-subtitles <youtube-url>
-```
-
-Use `whisper-ctranslate2` with a local faster-whisper model directory:
-
-```powershell
-yt-2-bili download `
-  --generate-subtitles `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
-  <youtube-url>
-```
-
-Optimize for CPU (6800X3D/7800X3D) with `float32` for better accuracy:
-
-```powershell
-yt-2-bili download `
-  --generate-subtitles `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
-  --whisper-device cpu `
-  --whisper-compute-type float32 `
-  <youtube-url>
-```
-
-This creates:
-
-```text
-<video-id>.mp4
-<video-id>.srt
-<video-id>.burned.mp4  (burned-in subtitles by default)
-```
-
-Use `--subtitle-mode=soft` to create `<video-id>.subtitled.mp4` with soft subtitles instead.
-
-### Generate subtitles for local video
-
-```bash
-yt-2-bili subtitle <video-file>
-```
-
-Generate subtitles for a local video file without downloading or uploading. This is useful for batch processing videos locally before uploading.
-
-Use `whisper-ctranslate2` with a local faster-whisper model directory:
-
-```powershell
-yt-2-bili subtitle `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
-  video.mp4
-```
-
-Translate subtitles to Simplified Chinese:
-
-```powershell
-$env:ARK_API_KEY = "your-api-key"
-
-yt-2-bili subtitle `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
-  --subtitle-target-language zh `
-  video.mp4
-```
-
-Force regenerate subtitles even if files already exist:
-
-```powershell
-yt-2-bili subtitle `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
-  --subtitle-target-language zh `
-  --force-subtitles `
-  video.mp4
-```
-
-This creates:
-- `<video-id>.srt` - Source subtitles
-- `<video-id>.zh.srt` - Chinese subtitles (if translated)
-- `<video-id>.burned.mp4` - Video with burned-in subtitles (default)
-- `<video-id>.zh.burned.mp4` - Video with Chinese burned-in subtitles (if translated)
-
-Use `--subtitle-mode=soft` to create soft-subtitled videos (`.subtitled.mp4`) instead.
-
-#### Translate subtitles to Simplified Chinese
-
-When `--subtitle-target-language zh` is set with `--generate-subtitles`, the source SRT is sent to Doubao via the Volcengine Ark API for translation. Each batch preserves block count, numbering, and time ranges exactly; translation failure stops the upload.
-
-```powershell
-# Set your Ark API key
-$env:ARK_API_KEY = "your-api-key"
-
-yt-2-bili transfer `
-  --cookie $env:USERPROFILE\cookies.json `
-  --generate-subtitles `
-  --subtitle-target-language zh `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
-  <youtube-url>
-```
-
-Optional: override the LLM model (default is `deepseek-v4-pro`).
-
-```powershell
-yt-2-bili transfer `
-  --generate-subtitles `
-  --subtitle-target-language zh `
-  --llm-model-name "deepseek-v4-pro" `
-  <youtube-url>
-```
-
-This creates:
-
-```text
-<video-id>.mp4
-<video-id>.srt              # Source SRT, kept as intermediate artifact
-<video-id>.zh.srt            # Chinese SRT
-<video-id>.zh.burned.mp4     # Video with Chinese burned-in subtitle (default)
-```
-
-Use `--subtitle-mode=soft` to create `<video-id>.zh.subtitled.mp4` with soft subtitles instead.
-
-### Upload to Bilibili
-
-```bash
-yt-2-bili upload --cookie cookies.json --title "Video title" video.mp4
-```
-
-Generate and upload a soft-subtitled MP4:
-
-```bash
-yt-2-bili upload --generate-subtitles --cookie cookies.json --title "Video title" video.mp4
-```
-
-Useful options:
-
-```bash
-yt-2-bili upload \
-  --cookie cookies.json \
-  --title "Video title" \
-  --desc "Video description" \
-  --cover cover.jpg \
-  --source "https://www.youtube.com/watch?v=..." \
-  --tag "tag1,tag2" \
-  --tid 171 \
-  video.mp4
-```
-
-### Transfer from YouTube to Bilibili
-
-```bash
-yt-2-bili transfer --cookie cookies.json <youtube-url>
-```
-
-This downloads the YouTube video, builds a Bilibili description containing the original author and YouTube link, then uploads it to Bilibili.
-
-With `--generate-subtitles`, it generates `<video-id>.srt`, embeds it into `<video-id>.subtitled.mp4`, and uploads the subtitled MP4. Add `--subtitle-target-language zh` to translate the source subtitles to Simplified Chinese before embedding.
-
-Use `whisper-ctranslate2` with a local faster-whisper model directory during transfer:
-
-```powershell
-yt-2-bili transfer `
-  --cookie $env:USERPROFILE\cookies.json `
-  --generate-subtitles `
-  --subtitle-target-language zh `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory "E:\Models\faster-whisper-large-v3" `
-  <youtube-url>
-```
-
-## Common Options
-
-| Option | Description |
-| --- | --- |
-| `-c, --cookie` | Path to biliup `cookies.json`; defaults to `cookies.json` in the current directory if it exists. |
-| `-o, --output-dir` | Directory for downloaded files. Default on this machine: `C:\Users\18905\AppData\Local\Temp\yt-2-bili`. |
-| `-q, --quality` | Video quality: `1080p`, `720p`, `480p`, or `best`. Default: `1080p`. |
-| `-t, --tid` | Bilibili category ID. Default: `171`. |
-| `--cleanup` | Clean up generated files after a successful `transfer`; by default files are kept. |
-| `--force-download` | Download again even if the expected local video file already exists. |
-| `--force-subtitles` | Force regenerate subtitles even if files already exist. |
-| `--generate-subtitles` | Generate an SRT file and burn it into the video (default) or embed as soft subtitles. |
-| `--subtitle-mode` | Subtitle mode: `burned`/`hard` (default, burned into video) or `soft` (embedded track). |
-| `--whisper-path` | Path to the Whisper-compatible executable if it is not in `PATH`. |
-| `--whisper-model-directory` | Local model directory for Whisper-compatible CLIs that support `--model_directory`. |
-| `--whisper-device` | Device for Whisper (e.g. `cpu`, `cuda`). Passed as `--device` if set. |
-| `--whisper-compute-type` | Compute type for Whisper (e.g. `int8`, `float16`, `float32`). Overrides default `int8`. |
-| `--subtitle-target-language` | Target language for subtitle translation (e.g. `zh`). Requires `--generate-subtitles`. |
-| `--llm-model-name` | LLM model for subtitle translation. Default: `deepseek-v4-pro`. |
-| `--yt-dlp-path` | Path to the `yt-dlp` executable if it is not in `PATH`. |
-| `--biliup-path` | Path to the `biliup` executable if it is not in `PATH`. |
-
-**Whisper Optimization**: By default, `--compute_type int8`, `--batched True`, and `--vad_filter True` are used for faster transcription.
-
-## Integration Tests
-
-The integration test scripts live under `integration-tests/` and use Python.
-
-These scripts run the real CLI. `upload.py` and `e2e.py` perform real Bilibili uploads with the cookie file.
-
-Default test video:
-
-```text
-https://www.youtube.com/watch?v=mGEfasQl2Zo
-```
-
-Default cookie path:
-
-```text
-%USERPROFILE%\cookies.json
-```
-
-Run download only:
-
-```powershell
-python integration-tests\download.py
-```
-
-Run subtitle generation test:
-
-```powershell
-python integration-tests\subtitles.py
-```
-
-Run real upload using a generated short test video:
-
-```powershell
-python integration-tests\upload.py
-```
-
-Run real end-to-end download and upload:
-
-```powershell
-python integration-tests\e2e.py
-```
-
-Override cookie path:
-
-```powershell
-python integration-tests\upload.py C:\path\to\cookies.json
-python integration-tests\e2e.py C:\path\to\cookies.json
-```
-
-Override end-to-end URL:
-
-```powershell
-python integration-tests\e2e.py C:\path\to\cookies.json https://www.youtube.com/watch?v=VIDEO_ID
-```
+| Command | Description |
+|---------|-------------|
+| `download <url>` | 下载 YouTube 视频 |
+| `subtitle <file>` | 本地视频生成字幕 |
+| `upload --cookie <path> --title <title> <file>` | 上传到 Bilibili |
+| `transfer --cookie <path> <url>` | 完整流水线（下载→字幕→翻译→上传） |
+
+## Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-c, --cookie` | `./cookies.json` | biliup cookies 路径 |
+| `-o, --output-dir` | `%TEMP%\yt-2-bili` | 输出目录 |
+| `-q, --quality` | `1080p` | 画质：`1080p` / `720p` / `480p` / `best` |
+| `-t, --tid` | `171` | Bilibili 分区 ID |
+| `--generate-subtitles` | — | 生成字幕并嵌入视频 |
+| `--subtitle-mode` | `burned` | `burned`（硬字幕）/ `soft`（软字幕） |
+| `--subtitle-target-language` | — | 翻译目标语言（如 `zh`），需 `ANTHROPIC_AUTH_TOKEN` 或 `ARK_API_KEY` |
+| `--whisper-path` | — | Whisper 可执行文件路径 |
+| `--whisper-model-directory` | — | 本地模型目录 |
+| `--whisper-device` | — | `cpu` / `cuda` |
+| `--whisper-compute-type` | `int8` | `int8` / `float16` / `float32` |
+| `--llm-model-name` | `deepseek-v4-pro` | 翻译用 LLM 模型 |
+| `--force-download` | — | 强制重新下载 |
+| `--force-subtitles` | — | 强制重新生成字幕 |
+| `--cleanup` | — | transfer 成功后清理临时文件 |
+| `--yt-dlp-path` | — | yt-dlp 路径 |
+| `--biliup-path` | — | biliup 路径 |
+
+## 测试
+
+[TESTING.md](TESTING.md)
 
 ## Notes
 
-- Playlist URLs are not supported yet.
-- Uploads use copyright mode `2`, meaning reupload/repost.
-- The Bilibili source field is set to the original YouTube URL during `transfer`.
-
-## Whisper Test
-
-Test direct `whisper-ctranslate2` invocation (same options as yt-2-bili uses by default):
-
-```powershell
-whisper-ctranslate2 `
-  "E:\Projects\GoProject\yt-2-bili\sandbox\01.mp4" `
-  --model_directory "E:\Models\faster-whisper-large-v3" `
-  --output_format srt `
-  --output_dir "E:\Projects\GoProject\yt-2-bili\sandbox" `
-  --device cpu `
-  --compute_type int8 `
-  --batched True `
-  --vad_filter True
-```
-
-For better accuracy with 6800X3D/7800X3D (slower), use `float32`:
-
-```powershell
-whisper-ctranslate2 `
-  "E:\Projects\GoProject\yt-2-bili\sandbox\01.mp4" `
-  --model_directory "E:\Models\faster-whisper-large-v3" `
-  --output_format srt `
-  --output_dir "E:\Projects\GoProject\yt-2-bili\sandbox" `
-  --device cpu `
-  --compute_type float32 `
-  --batched True `
-  --vad_filter True
-```
+- 不支持播放列表 URL
+- 上传使用版权模式 `2`（转载）

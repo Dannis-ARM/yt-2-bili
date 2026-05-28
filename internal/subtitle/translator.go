@@ -300,29 +300,29 @@ func (t *LLMTranslator) translateAnthropic(ctx context.Context, input string, sy
 }
 
 type anthropicRequest struct {
-	Model     string
-	MaxTokens int
-	System    string
-	Messages  []anthropicMessage
-	Stream    bool
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    string             `json:"system"`
+	Messages  []anthropicMessage `json:"messages"`
+	Stream    bool               `json:"stream"`
 	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicThinking struct {
-	Type string
+	Type string `json:"type"`
 }
 
 type anthropicMessage struct {
-	Role    string
-	Content string
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type anthropicSSEEvent struct {
-	Type  string
+	Type  string `json:"type"`
 	Delta *struct {
-		Type string
-		Text string
-	}
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"delta"`
 }
 
 func readAnthropicStream(r io.Reader, label string) (string, error) {
