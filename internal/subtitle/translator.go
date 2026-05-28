@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,28 +92,84 @@ func (t *LLMTranslator) TranslateSRT(ctx context.Context, srtContent string) (st
 	batches := batchSRTBlocks(blocks, t.batchCharLimit)
 	fmt.Fprintf(os.Stderr, "Translating %d block(s) in %d batch(es)...\n", len(blocks), len(batches))
 
+	var warnings TranslationWarnings
 	texts := make([]string, 0, len(blocks))
 	for i, batch := range batches {
 		fmt.Fprintf(os.Stderr, "Translating batch %d/%d...\n", i+1, len(batches))
 		input := buildTextInput(batch)
-		output, err := t.translateWithPrompt(ctx, input, systemPromptSRT, "SRT")
-		if err != nil {
-			return "", err
-		}
-		parsed, err := parseTextOutput(output, len(batch))
-		if err != nil {
-			return "", err
-		}
-		// Fill missing entries with original text (LLM might skip some markers)
-		for j, t := range parsed {
-			if t == "" && j < len(batch) {
-				parsed[j] = batch[j].Text
+		var parsed *ParseResult
+		var lastOutput string
+		for attempt := 0; attempt < 3; attempt++ {
+			label := fmt.Sprintf("SRT-b%d", i+1)
+			if attempt > 0 {
+				label = fmt.Sprintf("SRT-b%d-retry%d", i+1, attempt)
+			}
+			output, err := t.translateWithPrompt(ctx, input, systemPromptSRT, label)
+			if err != nil {
+				return "", err
+			}
+			lastOutput = output
+			parsed, err = parseTextOutput(output, len(batch))
+			if err != nil {
+				return "", err
+			}
+			if len(parsed.Issues) == 0 {
+				break
+			}
+			if attempt < 2 {
+				fmt.Fprintf(os.Stderr, "Batch %d attempt %d: %d issue(s), retrying...\n", i+1, attempt+1, len(parsed.Issues))
+				input = buildRetryPrompt(batch, parsed, output)
 			}
 		}
-		texts = append(texts, parsed...)
+		if len(parsed.Issues) > 0 {
+			warnings.add(parsed.Issues)
+		}
+		for j, t := range parsed.Texts {
+			if t == "" && j < len(batch) {
+				parsed.Texts[j] = batch[j].Text
+			}
+		}
+		texts = append(texts, parsed.Texts...)
+		_ = lastOutput
+	}
+
+	if s := warnings.summary(); s != "" {
+		fmt.Fprintf(os.Stderr, "%s\n", s)
+		for _, d := range warnings.Details {
+			fmt.Fprintf(os.Stderr, "  - %s\n", d)
+		}
 	}
 
 	return reconstructSRT(blocks, texts), nil
+}
+
+const maxRetryPromptChars = 200000
+
+// buildRetryPrompt constructs a correction prompt that includes the previous LLM
+// output so the model can patch rather than re-translate from scratch.
+func buildRetryPrompt(blocks []srt.Block, prevResult *ParseResult, prevOutput string) string {
+	var sb strings.Builder
+	sb.WriteString("Your previous translation had the following issues:\n")
+	for _, issue := range prevResult.Issues {
+		fmt.Fprintf(&sb, "- %s\n", issue.Details)
+	}
+	sb.WriteString("\nHere is your previous output for reference:\n\n")
+	sb.WriteString(prevOutput)
+	sb.WriteString("\n\n---\n\n")
+	sb.WriteString("Please fix the issues above and output the COMPLETE translation again.\n")
+	sb.WriteString("CRITICAL RULES:\n")
+	sb.WriteString("1. Keep ALL [N] markers exactly unchanged, from [1] to [")
+	fmt.Fprintf(&sb, "%d", len(blocks))
+	sb.WriteString("], in order\n")
+	sb.WriteString("2. Do NOT skip or reorder any markers\n")
+	sb.WriteString("3. Translate EVERY entry with its actual meaning — NEVER use placeholder text like \"这里是第N条内容\"\n")
+	sb.WriteString("4. Output ONLY the fixed translation with markers. No explanations.\n")
+
+	result := sb.String()
+	if len(result) > maxRetryPromptChars {
+		result = result[:maxRetryPromptChars]
+	}
+	return result
 }
 
 func (t *LLMTranslator) TranslateText(ctx context.Context, text string) (string, error) {
@@ -144,7 +201,9 @@ func (t *LLMTranslator) translateWithPrompt(ctx context.Context, input string, s
 }
 
 const (
-	systemPromptSRT = `Translate each numbered entry to Simplified Chinese. Keep the [N] markers exactly unchanged and in the same order. Translate only the text after each marker. Output ONLY the translated entries with markers. No greetings, explanations, or markdown fences. Be concise.`
+	systemPromptSRT = `Translate each numbered entry to Simplified Chinese. Keep the [N] markers exactly unchanged and in the same order. Translate only the text after each marker. Output ONLY the translated entries with markers. No greetings, explanations, or markdown fences. Be concise.
+
+CRITICAL: Translate EVERY entry faithfully. Never use placeholder text like "这里是第N条内容" or "第N条内容" — each translation must reflect the actual meaning of the source text.`
 
 	systemPromptText = `You are a translator. Translate the given text to Simplified Chinese.
 
@@ -405,34 +464,144 @@ func buildTextInput(blocks []srt.Block) string {
 	return sb.String()
 }
 
+// MarkerIssue describes a single alignment problem in the LLM response.
+type MarkerIssue struct {
+	Type    string // "missing", "out_of_order", or "placeholder"
+	Marker  int
+	Details string
+}
+
+// ParseResult holds extracted texts (aligned by marker number) and any issues found.
+type ParseResult struct {
+	Texts  []string
+	Issues []MarkerIssue
+}
+
+// TranslationWarnings accumulates alignment warnings across batches.
+type TranslationWarnings struct {
+	Missing     int
+	Reordered   int
+	Placeholder int
+	Details     []string
+}
+
+func (w *TranslationWarnings) add(issues []MarkerIssue) {
+	for _, issue := range issues {
+		switch issue.Type {
+		case "missing":
+			w.Missing++
+		case "out_of_order":
+			w.Reordered++
+		case "placeholder":
+			w.Placeholder++
+		}
+		w.Details = append(w.Details, issue.Details)
+	}
+}
+
+func (w *TranslationWarnings) summary() string {
+	total := w.Missing + w.Reordered + w.Placeholder
+	if total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Translation completed with %d warnings (%d missing, %d reordered, %d placeholder)", total, w.Missing, w.Reordered, w.Placeholder)
+}
+
 var textMarkerRe = regexp.MustCompile(`(?m)^\[(\d+)\]\s*`)
 
-// parseTextOutput extracts translated texts from LLM response.
-// It matches [N] markers positionally (first marker → index 0, second → index 1, ...).
-// If fewer markers than expected, remaining entries are left empty for the caller to fill.
-func parseTextOutput(output string, expectedCount int) ([]string, error) {
+var placeholderPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^这里是第\d+条内容[。.]?$`),
+	regexp.MustCompile(`^第\d+条内容[。.]?$`),
+	regexp.MustCompile(`^这是第\d+条[。.]?$`),
+	regexp.MustCompile(`^内容\d+[。.]?$`),
+	regexp.MustCompile(`^条目\d+[。.]?$`),
+	regexp.MustCompile(`^这里是第\d+条[。.]?$`),
+	regexp.MustCompile(`^\[?\d+\]?\s*内容[。.]?$`),
+}
+
+func isPlaceholder(text string) bool {
+	for _, p := range placeholderPatterns {
+		if p.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseTextOutput extracts translated texts from LLM response by matching [N] marker
+// numbers (not position). Detects missing and out-of-order markers for retry.
+func parseTextOutput(output string, expectedCount int) (*ParseResult, error) {
 	matches := textMarkerRe.FindAllStringSubmatchIndex(output, -1)
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("no translated entries found in response")
 	}
 
-	if len(matches) != expectedCount {
-		fmt.Fprintf(os.Stderr, "Warning: expected %d entries, got %d markers — missing entries will use original text\n", expectedCount, len(matches))
+	type markerInfo struct {
+		number    int
+		textStart int
+	}
+
+	markers := make([]markerInfo, 0, len(matches))
+	for _, m := range matches {
+		num, err := strconv.Atoi(output[m[2]:m[3]])
+		if err != nil {
+			continue
+		}
+		markers = append(markers, markerInfo{number: num, textStart: m[1]})
 	}
 
 	texts := make([]string, expectedCount)
-	for i, m := range matches {
-		if i >= expectedCount {
-			break
+	seen := make(map[int]bool)
+	var issues []MarkerIssue
+
+	for i, mk := range markers {
+		seen[mk.number] = true
+
+		// Detect out-of-order markers
+		expectedNum := i + 1
+		if mk.number != expectedNum {
+			issues = append(issues, MarkerIssue{
+				Type:    "out_of_order",
+				Marker:  mk.number,
+				Details: fmt.Sprintf("position %d: expected marker [%d] but found [%d]", i+1, expectedNum, mk.number),
+			})
 		}
-		textStart := m[1]
+
+		// Text from this marker to the next marker (or end of output)
 		textEnd := len(output)
-		if i+1 < len(matches) {
+		if i+1 < len(markers) {
 			textEnd = matches[i+1][0]
 		}
-		texts[i] = strings.TrimSpace(output[textStart:textEnd])
+
+		idx := mk.number - 1
+		if idx >= 0 && idx < expectedCount {
+			texts[idx] = strings.TrimSpace(output[mk.textStart:textEnd])
+		}
 	}
-	return texts, nil
+
+	// Detect missing markers
+	for n := 1; n <= expectedCount; n++ {
+		if !seen[n] {
+			issues = append(issues, MarkerIssue{
+				Type:    "missing",
+				Marker:  n,
+				Details: fmt.Sprintf("marker [%d] is missing from response", n),
+			})
+		}
+	}
+
+	// Detect placeholder text
+	for i, text := range texts {
+		if text != "" && isPlaceholder(text) {
+			issues = append(issues, MarkerIssue{
+				Type:    "placeholder",
+				Marker:  i + 1,
+				Details: fmt.Sprintf("marker [%d] contains placeholder text: %q", i+1, text),
+			})
+		}
+	}
+
+	return &ParseResult{Texts: texts, Issues: issues}, nil
 }
 
 func reconstructSRT(blocks []srt.Block, texts []string) string {
@@ -449,6 +618,9 @@ func reconstructSRT(blocks []srt.Block, texts []string) string {
 
 // ---- Shared ----
 
+// validateTranslatedSRT checks that the translated SRT has matching timelines.
+// Returns error on timeline mismatches for cache invalidation. Callers that should
+// not abort should log the error as a warning instead.
 func validateTranslatedSRT(source, translated string) error {
 	sourceBlocks, err := srt.Parse(source)
 	if err != nil {
@@ -459,7 +631,6 @@ func validateTranslatedSRT(source, translated string) error {
 		return fmt.Errorf("translated subtitle is invalid: %w", err)
 	}
 
-	// Build a map of source timelines for validation
 	sourceTimelines := make(map[string]bool, len(sourceBlocks))
 	for _, b := range sourceBlocks {
 		sourceTimelines[formatTimeline(b.Start, b.End)] = true

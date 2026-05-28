@@ -271,8 +271,7 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	if err := validateTranslatedSRT(string(sourceData), translated); err != nil {
-		fmt.Fprintf(os.Stderr, "FAILED\n")
-		return nil, err
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 	}
 	if err := os.WriteFile(zhPath, []byte(translated), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED\n")
