@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dannis/yt-2-bili/internal/ffmpeg"
+	"github.com/dannis/yt-2-bili/internal/subtitle/breaker"
 	"github.com/dannis/yt-2-bili/internal/subtitle/srt"
 	"github.com/dannis/yt-2-bili/internal/subtitle/whisper"
 )
@@ -194,7 +195,7 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 		start = time.Now()
 		entriesBefore, _ := srt.CountBlocks(srtPath)
 		fmt.Fprintf(os.Stderr, "Applying sentence breaking... ")
-		if err := applySentenceBreaking(srtPath); err != nil {
+		if err := breaker.ApplyToFile(srtPath); err != nil {
 			fmt.Fprintf(os.Stderr, "FAILED\n")
 			return nil, err
 		}

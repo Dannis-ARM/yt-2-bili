@@ -1,4 +1,4 @@
-package subtitle
+package breaker
 
 import (
 	"fmt"
@@ -42,6 +42,22 @@ func BreakSentences(srtContent string) (string, error) {
 	}
 
 	return srt.Format(result), nil
+}
+
+// ApplyToFile applies sentence breaking to an SRT file in-place.
+func ApplyToFile(srtPath string) error {
+	data, err := os.ReadFile(srtPath)
+	if err != nil {
+		return fmt.Errorf("sentence breaking: read source srt: %w", err)
+	}
+	broken, err := BreakSentences(string(data))
+	if err != nil {
+		return fmt.Errorf("sentence breaking: %w", err)
+	}
+	if err := os.WriteFile(srtPath, []byte(broken), 0o644); err != nil {
+		return fmt.Errorf("sentence breaking: write broken srt: %w", err)
+	}
+	return nil
 }
 
 func splitBlockIfNeeded(block srt.Block) []srt.Block {
@@ -123,21 +139,6 @@ func splitBlockEvenly(text string, start, end time.Duration, numParts int) []srt
 		}
 	}
 	return blocks
-}
-
-func applySentenceBreaking(srtPath string) error {
-	data, err := os.ReadFile(srtPath)
-	if err != nil {
-		return fmt.Errorf("sentence breaking: read source srt: %w", err)
-	}
-	broken, err := BreakSentences(string(data))
-	if err != nil {
-		return fmt.Errorf("sentence breaking: %w", err)
-	}
-	if err := os.WriteFile(srtPath, []byte(broken), 0o644); err != nil {
-		return fmt.Errorf("sentence breaking: write broken srt: %w", err)
-	}
-	return nil
 }
 
 func charCount(s string) int {
