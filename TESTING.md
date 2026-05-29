@@ -2,6 +2,26 @@
 
 > 每个 stage 独立可运行，复制命令即可测试。
 
+## 快捷环境变量预设
+
+开始测试前，根据你用的 API 复制对应区块：
+
+```powershell
+# === 公共变量 ===
+$env:TEST_URL = "https://www.youtube.com/watch?v=mGEfasQl2Zo"
+$COOKIE = "$env:USERPROFILE\cookies.json"
+$WHISPER_DIR = "E:\Models\faster-whisper-large-v3"
+
+# === DeepSeek API ===
+$env:ANTHROPIC_AUTH_TOKEN = "your-deepseek-api-key"
+# 或从 bitwarden 获取: $env:ANTHROPIC_AUTH_TOKEN=$(bwsw get -f DEE)
+
+# === 或 Ark API ===
+$env:ARK_API_KEY = "your-ark-api-key"
+```
+
+---
+
 ## 环境准备
 
 ```powershell
@@ -91,6 +111,7 @@ yt-2-bili subtitle `
 ```powershell
 # DeepSeek API（设置 ANTHROPIC_AUTH_TOKEN）
 $env:ANTHROPIC_AUTH_TOKEN = "your-deepseek-api-key"
+# 或从 bitwarden 获取: $env:ANTHROPIC_AUTH_TOKEN=$(bwsw get -f DEE)
 
 yt-2-bili subtitle `
   --whisper-path whisper-ctranslate2 `
@@ -169,6 +190,7 @@ yt-2-bili upload `
 ```powershell
 # DeepSeek 翻译
 $env:ANTHROPIC_AUTH_TOKEN = "your-deepseek-api-key"
+# 或从 bitwarden 获取: $env:ANTHROPIC_AUTH_TOKEN=$(bwsw get -f DEE)
 
 yt-2-bili transfer `
   --cookie $COOKIE `
@@ -204,25 +226,6 @@ yt-2-bili transfer `
   --whisper-model-directory $WHISPER_DIR `
   --cleanup `
   $TEST_URL
-```
-
----
-
-## 快捷环境变量预设
-
-开始测试前，根据你用的 API 复制对应区块：
-
-```powershell
-# === 公共变量 ===
-$env:TEST_URL = "https://www.youtube.com/watch?v=mGEfasQl2Zo"
-$COOKIE = "$env:USERPROFILE\cookies.json"
-$WHISPER_DIR = "E:\Models\faster-whisper-large-v3"
-
-# === DeepSeek API ===
-$env:ANTHROPIC_AUTH_TOKEN = "your-deepseek-api-key"
-
-# === 或 Ark API ===
-$env:ARK_API_KEY = "your-ark-api-key"
 ```
 
 ---
