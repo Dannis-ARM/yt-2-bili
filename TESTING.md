@@ -2,6 +2,53 @@
 
 > 每个 stage 独立可运行，复制命令即可测试。
 
+---
+
+## TL;DR — 完整流水线（最常用）
+
+一键完成：YouTube 下载 → 字幕生成 → 中文翻译 → Bilibili 上传。
+
+```powershell
+# === 前置准备 ===
+$TEST_URL = "https://www.youtube.com/watch?v=mGEfasQl2Zo"
+$COOKIE = "$env:USERPROFILE\cookies.json"
+$WHISPER_DIR = "E:\Models\faster-whisper-large-v3"
+
+# DeepSeek 翻译（设置 ANTHROPIC_AUTH_TOKEN）
+$env:ANTHROPIC_AUTH_TOKEN = "your-deepseek-api-key"
+# 或从 bitwarden 获取: $env:ANTHROPIC_AUTH_TOKEN=$(bwsw get -f DEE)
+
+# 或使用 Ark 翻译（设置 ARK_API_KEY）
+$env:ARK_API_KEY = "your-ark-api-key"
+
+# === 运行完整流水线 ===
+yt-2-bili transfer `
+  --cookie $COOKIE `
+  --generate-subtitles `
+  --subtitle-target-language zh `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory $WHISPER_DIR `
+  $TEST_URL
+
+# 可选：上传后清理临时文件
+yt-2-bili transfer `
+  --cookie $COOKIE `
+  --generate-subtitles `
+  --subtitle-target-language zh `
+  --whisper-path whisper-ctranslate2 `
+  --whisper-model-directory $WHISPER_DIR `
+  --cleanup `
+  $TEST_URL
+```
+
+---
+
+## 分步测试（Stage 1-6）
+
+需要精细控制每一步时使用下面的 stage。
+
+---
+
 ## 快捷环境变量预设
 
 开始测试前，根据你用的 API 复制对应区块：
@@ -179,53 +226,6 @@ yt-2-bili upload `
   --title "测试视频" `
   --generate-subtitles `
   video.mp4
-```
-
----
-
-## Stage 7 — 完整流水线（YouTube → Bilibili）
-
-这是最常用的命令：下载 → 字幕 → 翻译 → 上传。
-
-```powershell
-# DeepSeek 翻译
-$env:ANTHROPIC_AUTH_TOKEN = "your-deepseek-api-key"
-# 或从 bitwarden 获取: $env:ANTHROPIC_AUTH_TOKEN=$(bwsw get -f DEE)
-
-yt-2-bili transfer `
-  --cookie $COOKIE `
-  --generate-subtitles `
-  --subtitle-target-language zh `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory $WHISPER_DIR `
-  $TEST_URL
-```
-
-```powershell
-# Ark 翻译
-$env:ARK_API_KEY = "your-ark-api-key"
-
-yt-2-bili transfer `
-  --cookie $COOKIE `
-  --generate-subtitles `
-  --subtitle-target-language zh `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory $WHISPER_DIR `
-  $TEST_URL
-```
-
-**验证**：完整流程无报错，Bilibili 上出现带中文字幕的视频
-
-```powershell
-# 上传后清理临时文件
-yt-2-bili transfer `
-  --cookie $COOKIE `
-  --generate-subtitles `
-  --subtitle-target-language zh `
-  --whisper-path whisper-ctranslate2 `
-  --whisper-model-directory $WHISPER_DIR `
-  --cleanup `
-  $TEST_URL
 ```
 
 ---
