@@ -15,9 +15,10 @@ $COOKIE = "$env:USERPROFILE\cookies.json"
 $WHISPER_DIR = "E:\Models\faster-whisper-large-v3"
 
 # DeepSeek 翻译（设置 ANTHROPIC_AUTH_TOKEN）
-$env:ANTHROPIC_AUTH_TOKEN = "your-deepseek-api-key"
-# 或从 bitwarden 获取: $env:ANTHROPIC_AUTH_TOKEN=$(bwsw get -f DEE)
-
+# 从 bitwarden 获取: 
+$env:ANTHROPIC_AUTH_TOKEN=$(bwsw get -f DEE)
+# Or set manually 
+# $env:ANTHROPIC_AUTH_TOKEN = "your-deepseek-api-key"
 # 或使用 Ark 翻译（设置 ARK_API_KEY）
 $env:ARK_API_KEY = "your-ark-api-key"
 

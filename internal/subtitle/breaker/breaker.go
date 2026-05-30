@@ -1,166 +1,233 @@
+// Package breaker provides intelligent subtitle merging and splitting.
 package breaker
 
 import (
 	"fmt"
-	"math"
 	"os"
-	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dannis/yt-2-bili/internal/subtitle/srt"
+	"github.com/dannis/yt-2-bili/internal/subtitle/whisperjson"
 )
 
 const (
-	maxCharsPerEntry    = 84
+	// maxCharsPerEntry is the maximum number of characters per subtitle block.
+	// For Chinese, 40 characters is a comfortable reading length (about 2 lines).
+	maxCharsPerEntry = 40
+
+	// maxDurationPerEntry is the maximum duration per subtitle block.
 	maxDurationPerEntry = 5 * time.Second
+
+	// maxSilenceGap is the maximum silence between words that we'll allow merging.
+	// If there's a gap longer than this, we'll start a new subtitle block.
+	maxSilenceGap = 500 * time.Millisecond
 )
 
-type timedSegment struct {
-	text  string
-	start time.Duration
-	end   time.Duration
+// SubtitleBreaker is the interface for subtitle processing.
+type SubtitleBreaker interface {
+	Break() ([]srt.Block, error)
 }
 
-// BreakSentences is a safety net that only splits blocks exceeding maxCharsPerEntry or maxDurationPerEntry.
-// It trusts that whisper-ctranslate2 has already done proper sentence segmentation via its configuration.
-func BreakSentences(srtContent string) (string, error) {
-	blocks, err := srt.Parse(srtContent)
-	if err != nil {
-		return "", fmt.Errorf("sentence breaking: %w", err)
+// JSONBreaker implements high-precision word-level breaking from Whisper JSON.
+type JSONBreaker struct {
+	Output whisperjson.WhisperOutput
+}
+
+// LegacySRTBreaker implements backward compatibility for existing SRT files.
+type LegacySRTBreaker struct {
+	Blocks []srt.Block
+}
+
+// Break processes Whisper JSON with word-level timestamps and returns optimized SRT blocks.
+func (j *JSONBreaker) Break() ([]srt.Block, error) {
+	words := j.Output.FlattenWords()
+	if len(words) == 0 {
+		return nil, nil
 	}
 
 	var result []srt.Block
-	for _, block := range blocks {
-		splitBlocks := splitBlockIfNeeded(block)
-		result = append(result, splitBlocks...)
+	var currentWords []whisperjson.Word
+	var currentText string
+
+	for i, word := range words {
+		// Check if we should start a new block
+		shouldStartNewBlock := false
+
+		if len(currentWords) > 0 {
+			// Check 1: Would adding this word exceed char limit?
+			proposedText := currentText + cleanWord(word.Word)
+			if utf8.RuneCountInString(proposedText) > maxCharsPerEntry {
+				shouldStartNewBlock = true
+			}
+
+			// Check 2: Would adding this word exceed duration limit?
+			if !shouldStartNewBlock {
+				blockStart := currentWords[0].StartTime()
+				blockEnd := word.EndTime()
+				if blockEnd-blockStart > maxDurationPerEntry {
+					shouldStartNewBlock = true
+				}
+			}
+
+			// Check 3: Is there a long silence after the previous word?
+			if !shouldStartNewBlock {
+				prevWord := currentWords[len(currentWords)-1]
+				silenceGap := word.StartTime() - prevWord.EndTime()
+				if silenceGap > maxSilenceGap {
+					shouldStartNewBlock = true
+				}
+			}
+
+			// Check 4: Did the previous word end with sentence-ending punctuation?
+			if !shouldStartNewBlock {
+				prevText := cleanWord(currentWords[len(currentWords)-1].Word)
+				if endsWithSentencePunct(prevText) {
+					shouldStartNewBlock = true
+				}
+			}
+		}
+
+		if shouldStartNewBlock && len(currentWords) > 0 {
+			// Seal the current block
+			block := buildBlock(currentWords, currentText, len(result)+1)
+			result = append(result, block)
+
+			// Reset for next block
+			currentWords = nil
+			currentText = ""
+		}
+
+		// Add the current word
+		currentWords = append(currentWords, word)
+		currentText = currentText + cleanWord(word.Word)
+
+		// If this is the last word, seal the block
+		if i == len(words)-1 {
+			block := buildBlock(currentWords, currentText, len(result)+1)
+			result = append(result, block)
+		}
 	}
 
-	for i := range result {
-		result[i].Number = strconv.Itoa(i + 1)
-		result[i].Text = cleanText(result[i].Text)
+	return result, nil
+}
+
+// Break processes legacy SRT files with linear interpolation fallback.
+func (l *LegacySRTBreaker) Break() ([]srt.Block, error) {
+	// For now, we just return the blocks as-is with re-numbering.
+	// In the future, we could implement merging/splitting logic here.
+	result := make([]srt.Block, len(l.Blocks))
+	for i, b := range l.Blocks {
+		result[i] = srt.Block{
+			Number: fmt.Sprintf("%d", i+1),
+			Start:  b.Start,
+			End:    b.End,
+			Text:   cleanText(b.Text),
+		}
+	}
+	return result, nil
+}
+
+// BreakSentences is the backward-compatible entrypoint from SRT.
+func BreakSentences(srtContent string) (string, error) {
+	blocks, err := srt.Parse(srtContent)
+	if err != nil {
+		return "", fmt.Errorf("breaker: %w", err)
+	}
+
+	breaker := &LegacySRTBreaker{Blocks: blocks}
+	result, err := breaker.Break()
+	if err != nil {
+		return "", err
 	}
 
 	return srt.Format(result), nil
 }
 
-// ApplyToFile applies sentence breaking to an SRT file in-place.
+// ApplyToFile applies sentence breaking to an SRT file in-place (legacy).
 func ApplyToFile(srtPath string) error {
 	data, err := os.ReadFile(srtPath)
 	if err != nil {
-		return fmt.Errorf("sentence breaking: read source srt: %w", err)
+		return fmt.Errorf("breaker: read source srt: %w", err)
 	}
 	broken, err := BreakSentences(string(data))
 	if err != nil {
-		return fmt.Errorf("sentence breaking: %w", err)
+		return fmt.Errorf("breaker: %w", err)
 	}
 	if err := os.WriteFile(srtPath, []byte(broken), 0o644); err != nil {
-		return fmt.Errorf("sentence breaking: write broken srt: %w", err)
+		return fmt.Errorf("breaker: write broken srt: %w", err)
 	}
 	return nil
 }
 
-func splitBlockIfNeeded(block srt.Block) []srt.Block {
-	text := strings.Join(extractTextLines(block.Text), " ")
-	duration := block.End - block.Start
-	chars := charCount(text)
-
-	if duration <= maxDurationPerEntry && chars <= maxCharsPerEntry {
-		return []srt.Block{block}
+// ProcessJSONFile reads a Whisper JSON file and writes an optimized SRT file.
+func ProcessJSONFile(jsonPath, srtPath string) error {
+	output, err := whisperjson.ParseFile(jsonPath)
+	if err != nil {
+		return fmt.Errorf("breaker: %w", err)
 	}
 
-	numParts := 1
-	if chars > maxCharsPerEntry {
-		numParts = (chars + maxCharsPerEntry - 1) / maxCharsPerEntry
-	}
-	if duration > maxDurationPerEntry {
-		durationParts := int(math.Ceil(float64(duration) / float64(maxDurationPerEntry)))
-		if durationParts > numParts {
-			numParts = durationParts
-		}
+	breaker := &JSONBreaker{Output: output}
+	blocks, err := breaker.Break()
+	if err != nil {
+		return err
 	}
 
-	if numParts <= 1 {
-		return []srt.Block{block}
-	}
-
-	return splitBlockEvenly(text, block.Start, block.End, numParts)
+	return srt.Write(srtPath, blocks)
 }
 
-func splitBlockEvenly(text string, start, end time.Duration, numParts int) []srt.Block {
-	runes := []rune(text)
-	totalChars := len(runes)
-	totalDuration := end - start
-	charsPerPart := (totalChars + numParts - 1) / numParts
-	durationPerPart := totalDuration / time.Duration(numParts)
-
-	var result []timedSegment
-	current := start
-	charPos := 0
-
-	for i := 0; i < numParts; i++ {
-		if charPos >= totalChars {
-			break
-		}
-
-		partChars := charsPerPart
-		if charPos+partChars > totalChars {
-			partChars = totalChars - charPos
-		}
-
-		partText := string(runes[charPos : charPos+partChars])
-		partText = strings.TrimSpace(partText)
-		if partText == "" {
-			charPos += partChars
-			continue
-		}
-
-		partEnd := current + durationPerPart
-		if i == numParts-1 {
-			partEnd = end
-		}
-
-		result = append(result, timedSegment{
-			text:  partText,
-			start: current,
-			end:   partEnd,
-		})
-
-		charPos += partChars
-		current = partEnd
+// ProcessJSON processes Whisper JSON data and returns SRT content.
+func ProcessJSON(jsonData []byte) (string, error) {
+	output, err := whisperjson.Parse(jsonData)
+	if err != nil {
+		return "", fmt.Errorf("breaker: %w", err)
 	}
 
-	blocks := make([]srt.Block, len(result))
-	for i, seg := range result {
-		blocks[i] = srt.Block{
-			Start: seg.start,
-			End:   seg.end,
-			Text:  seg.text,
-		}
+	breaker := &JSONBreaker{Output: output}
+	blocks, err := breaker.Break()
+	if err != nil {
+		return "", err
 	}
-	return blocks
+
+	return srt.Format(blocks), nil
 }
 
-func charCount(s string) int {
-	return len([]rune(s))
+// Helper functions
+
+func buildBlock(words []whisperjson.Word, text string, number int) srt.Block {
+	return srt.Block{
+		Number: fmt.Sprintf("%d", number),
+		Start:  words[0].StartTime(),
+		End:    words[len(words)-1].EndTime(),
+		Text:   cleanText(text),
+	}
 }
 
-func extractTextLines(text string) []string {
-	text = strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n")
-	lines := strings.Split(text, "\n")
-	var result []string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			result = append(result, line)
-		}
-	}
-	if len(result) == 0 {
-		return []string{text}
-	}
-	return result
+func cleanWord(word string) string {
+	// Remove leading/trailing whitespace
+	word = strings.TrimSpace(word)
+	// For Chinese, we don't need spaces between words.
+	// Just return as-is - Whisper usually doesn't add spaces for Chinese anyway.
+	return word
 }
 
 func cleanText(text string) string {
-	return strings.Join(extractTextLines(text), "\n")
+	// Normalize whitespace
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.TrimSpace(text)
+	return text
+}
+
+func endsWithSentencePunct(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	lastRune, _ := utf8.DecodeLastRuneInString(s)
+	switch lastRune {
+	case '。', '！', '？', '.', '!', '?':
+		return true
+	default:
+		return false
+	}
 }

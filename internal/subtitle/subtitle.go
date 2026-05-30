@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/dannis/yt-2-bili/internal/ffmpeg"
-	"github.com/dannis/yt-2-bili/internal/subtitle/breaker"
 	"github.com/dannis/yt-2-bili/internal/subtitle/srt"
 	"github.com/dannis/yt-2-bili/internal/subtitle/whisper"
 )
@@ -170,7 +169,7 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 
 	reusedSubtitle := isNonEmptyFile(srtPath)
 	if !reusedSubtitle {
-		// Stage: Whisper SRT generation
+		// Whisper generates SRT with intelligent breaking via JSON intermediate
 		start := time.Now()
 		fmt.Fprintf(os.Stderr, "Generating SRT with Whisper... ")
 		whisperOpts := whisper.Options{
@@ -190,17 +189,6 @@ func prepareSubtitleFiles(ctx context.Context, opts Options) (*Result, error) {
 		}
 		entries, _ := srt.CountBlocks(srtPath)
 		fmt.Fprintf(os.Stderr, "done (%v) — %d entries, %s\n", time.Since(start).Round(time.Millisecond), entries, fileSizeStr(srtPath))
-
-		// Stage: Sentence breaking
-		start = time.Now()
-		entriesBefore, _ := srt.CountBlocks(srtPath)
-		fmt.Fprintf(os.Stderr, "Applying sentence breaking... ")
-		if err := breaker.ApplyToFile(srtPath); err != nil {
-			fmt.Fprintf(os.Stderr, "FAILED\n")
-			return nil, err
-		}
-		entriesAfter, _ := srt.CountBlocks(srtPath)
-		fmt.Fprintf(os.Stderr, "done (%v) — %d → %d entries\n", time.Since(start).Round(time.Millisecond), entriesBefore, entriesAfter)
 	} else {
 		fmt.Fprintf(os.Stderr, "Reusing existing SRT: %s (%s)\n", srtPath, fileSizeStr(srtPath))
 	}
